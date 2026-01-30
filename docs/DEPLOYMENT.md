@@ -185,10 +185,35 @@ Optional lightweight web interface for:
 - Inbox processing triggers
 - System statistics
 
-Deploy separately:
+**Docker deployment:**
 ```bash
 cd web-ui
 docker compose up -d
+```
+
+**Podman deployment (Raspberry Pi):**
+```bash
+cd ~/mail-done/web-ui
+
+# Create .env with API key
+API_KEY=$(grep "^API_KEY=" ../.env | cut -d= -f2)
+cat > .env << EOF
+BACKEND_API_URL=http://localhost:8000
+WEB_UI_PORT=8080
+API_KEY=$API_KEY
+EOF
+
+# Build and run
+podman build -t mail-done-webui .
+podman run -d \
+    --name mail-done-webui \
+    --network host \
+    --restart unless-stopped \
+    --env-file .env \
+    localhost/mail-done-webui:latest
+
+# Verify
+curl http://localhost:8080/health
 ```
 
 ### PostgreSQL Database
