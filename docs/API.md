@@ -1,5 +1,7 @@
 # FastAPI Backend Documentation
 
+> **Prerequisites:** [Deployment Guide](DEPLOYMENT.md) | **Related:** [MCP Server](MCP.md), [Database](DATABASE.md)
+
 The mail-done backend provides a RESTful API for email management, search, and processing.
 
 ## Quick Start

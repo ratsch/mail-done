@@ -30,9 +30,9 @@ RUN poetry config virtualenvs.create false \
 COPY . .
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8000
 
 # Start application (use shell form to allow $PORT expansion)
 # Run migrations at startup only if alembic.ini exists
-CMD sh -c "[ -f alembic.ini ] && poetry run alembic upgrade head; poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+CMD sh -c "[ -f alembic.ini ] && poetry run alembic upgrade head; poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"
 

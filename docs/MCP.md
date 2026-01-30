@@ -1,5 +1,7 @@
 # MCP Server Documentation
 
+> **Prerequisites:** [Deployment Guide](DEPLOYMENT.md) (backend must be running) | **Related:** [API Reference](API.md)
+
 The mail-done MCP (Model Context Protocol) server enables AI assistants like Claude and Cursor to search and access your email database.
 
 ## Overview

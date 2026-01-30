@@ -220,6 +220,8 @@ mail-done/
 
 ## Development
 
+For full local development setup, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
 ```bash
 # Run tests
 poetry run pytest
@@ -236,7 +238,8 @@ poetry run mypy backend/
 
 ## Documentation
 
-- [Deployment Guide](docs/DEPLOYMENT.md) - Self-hosted deployment
+- [Deployment Guide](docs/DEPLOYMENT.md) - Self-hosted deployment (Docker/Podman)
+- [Development Guide](docs/DEVELOPMENT.md) - Local development setup
 - [API Documentation](docs/API.md) - FastAPI endpoints
 - [MCP Server Setup](docs/MCP.md) - Claude/Cursor integration
 - [Database Schema](docs/DATABASE.md) - PostgreSQL and pgvector

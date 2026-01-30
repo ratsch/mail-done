@@ -1,5 +1,7 @@
 # Email Processing Guide
 
+> **Prerequisites:** [Deployment Guide](DEPLOYMENT.md) | **Related:** [MCP Server](MCP.md), [API Reference](API.md)
+
 `process_inbox.py` is the main script for processing emails through the classification and action pipeline.
 
 ## Quick Start

@@ -1,5 +1,7 @@
 # Database Documentation
 
+> **Prerequisites:** [Deployment Guide](DEPLOYMENT.md) | **Related:** [API Reference](API.md)
+
 mail-done uses PostgreSQL with pgvector extension for semantic search capabilities.
 
 ## Requirements
