@@ -65,11 +65,11 @@ def _validate_config(config: Dict) -> List[ValidationError]:
                     f"Invalid type '{ptype}'. Must be one of: {VALID_PROVIDER_TYPES}"
                 ))
             
-            # Azure requires endpoint
-            if ptype == "azure" and not cfg.get("endpoint"):
+            # Azure requires endpoint or endpoint_env
+            if ptype == "azure" and not (cfg.get("endpoint") or cfg.get("endpoint_env")):
                 errors.append(ValidationError(
                     f"providers.{name}.endpoint",
-                    "Azure provider requires 'endpoint'"
+                    "Azure provider requires 'endpoint' or 'endpoint_env'"
                 ))
             
             # Check api_key_env is a string if present

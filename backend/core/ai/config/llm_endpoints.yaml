@@ -9,6 +9,12 @@ providers:
     type: openai
     api_key_env: OPENAI_API_KEY
 
+  azure_west_europe:
+    type: azure
+    endpoint_env: AZURE_OPENAI_ENDPOINT
+    api_key_env: AZURE_OPENAI_API_KEY
+    api_version: "2025-04-01-preview"
+
   anthropic:
     type: anthropic
     api_key_env: ANTHROPIC_API_KEY
@@ -17,26 +23,15 @@ providers:
     type: ollama
     base_url: "http://localhost:11434"
 
-  # Uncomment and configure if using Azure OpenAI:
-  # azure_sweden:
-  #   type: azure
-  #   endpoint_env: AZURE_OPENAI_SWEDEN_ENDPOINT
-  #   api_key_env: AZURE_OPENAI_SWEDEN_API_KEY
-  #   api_version: "2025-04-01-preview"
-  #
-  # azure_west_europe:
-  #   type: azure
-  #   endpoint_env: AZURE_OPENAI_ENDPOINT
-  #   api_key_env: AZURE_OPENAI_API_KEY
-  #   api_version: "2025-04-01-preview"
-
 # Model -> Provider mapping
 models:
-  # OpenAI (recommended for most users)
+  # Azure West Europe (embeddings)
+  text-embedding-3-small: azure_west_europe
+  text-embedding-3-large: azure_west_europe
+
+  # OpenAI
   gpt-4o: openai
   gpt-4o-mini: openai
-  text-embedding-3-small: openai
-  text-embedding-3-large: openai
 
   # Anthropic
   claude-3-5-sonnet-20241022: anthropic
@@ -46,10 +41,5 @@ models:
   llama3: ollama
   mistral: ollama
 
-  # Uncomment if using Azure OpenAI:
-  # gpt-5.1: azure_sweden
-  # gpt-5-pro: azure_sweden
-  # gpt-5-mini: azure_west_europe
-
 # Default for unknown models
-default: openai
+default: azure_west_europe
