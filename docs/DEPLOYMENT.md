@@ -319,9 +319,17 @@ python3 --version     # Should be 3.11+
 
 ```bash
 cd ~
-git clone <repo-url> mail-done
+
+# Option A: Clone via HTTPS (no SSH key required)
+git clone https://github.com/ratsch/mail-done.git mail-done
+
+# Option B: Clone via SSH (requires SSH key configured)
+git clone git@github.com:ratsch/mail-done.git mail-done
+
 cd mail-done
 ```
+
+**Note:** If you get `Host key verification failed` with SSH, use the HTTPS URL instead.
 
 ### Step 3: Configure Environment
 
@@ -591,11 +599,15 @@ Common causes:
 
 ### Pi-Specific Performance Notes
 
-1. **First build is slow** (~5-10 minutes with good .dockerignore). Subsequent builds use cache and are fast (~30 seconds).
+1. **First build on fresh system:** Takes 10-15 minutes as it downloads base images and installs all dependencies. Poetry installs ~110 packages.
 
-2. **SD card vs SSD:** USB SSD dramatically improves build times and container I/O.
+2. **Subsequent builds:** With Docker cache, builds complete in ~30 seconds (only COPY step runs).
 
-3. **Memory:** With 4GB RAM, both containers run fine. PostgreSQL will use available memory for caching.
+3. **SD card vs SSD:** USB SSD dramatically improves build times and container I/O.
+
+4. **Memory:** With 4GB RAM, both containers run fine. PostgreSQL will use available memory for caching.
+
+5. **Image pulls:** First deployment downloads ~500MB of container images (python:3.11-slim, pgvector/pgvector:pg16).
 
 4. **CPU:** Container builds are CPU-intensive. The Pi 4 handles this but it takes time.
 
