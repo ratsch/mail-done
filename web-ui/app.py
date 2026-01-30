@@ -248,10 +248,16 @@ BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 # Get the base URL for OAuth redirect
 WEB_UI_BASE_URL = os.getenv("WEB_UI_BASE_URL", "http://localhost:8080")
 
-# OAuth is now always enabled (backend handles it)
-OAUTH_ENABLED = OAUTH_AVAILABLE
+# Auth can be disabled for local/trusted network deployments
+AUTH_DISABLED = os.getenv("AUTH_DISABLED", "").lower() in ("true", "1", "yes")
 
-if OAUTH_ENABLED:
+# OAuth is now always enabled (backend handles it) unless auth is disabled
+OAUTH_ENABLED = OAUTH_AVAILABLE and not AUTH_DISABLED
+
+if AUTH_DISABLED:
+    print("⚠️  Authentication DISABLED - all endpoints are public")
+    print("   Only use this on trusted networks!")
+elif OAUTH_ENABLED:
     print("✅ OAuth enabled (zero-knowledge mode - backend handles Google OAuth)")
     print(f"   Backend URL: {BACKEND_API_URL}")
     print(f"   Web-UI URL: {WEB_UI_BASE_URL}")
@@ -297,9 +303,15 @@ async def verify_credentials(request: Request, session = Depends(get_oauth_sessi
 
     OAuth is REQUIRED for zero-knowledge mode (signed API requests).
     Returns user email if valid, raises HTTPException if invalid.
+
+    If AUTH_DISABLED=true, authentication is bypassed (for local deployments).
     """
+    # Skip auth if disabled (local/trusted network mode)
+    if AUTH_DISABLED:
+        return "local-user@localhost"
+
     client_ip = get_client_ip(request)
-    
+
     # Check if IP is locked out
     if rate_limiter.is_locked_out(client_ip):
         remaining = rate_limiter.get_lockout_remaining(client_ip)
@@ -308,7 +320,7 @@ async def verify_credentials(request: Request, session = Depends(get_oauth_sessi
             detail=f"Too many failed attempts. Try again in {remaining} seconds.",
             headers={"Retry-After": str(remaining)},
         )
-    
+
     # Check rate limit
     if not rate_limiter.check_rate_limit(client_ip):
         raise HTTPException(
@@ -316,16 +328,16 @@ async def verify_credentials(request: Request, session = Depends(get_oauth_sessi
             detail="Rate limit exceeded. Please slow down.",
             headers={"Retry-After": "60"},
         )
-    
+
     # Check OAuth session
     if session:
         request.state.oauth_session = session
         return session.user_email
-    
+
     # No valid session
     rate_limiter.record_auth_failure(client_ip)
     secure_log(f"Failed auth attempt from {client_ip}", "warning")
-    
+
     raise HTTPException(
         status_code=401,
         detail="Authentication required. Please login via OAuth.",
@@ -765,8 +777,10 @@ async def auth_status(request: Request):
             }
     
     return {
-        "authenticated": False,
+        "authenticated": AUTH_DISABLED,  # If auth disabled, consider always authenticated
+        "auth_disabled": AUTH_DISABLED,
         "oauth_enabled": OAUTH_ENABLED,
+        "user": "local-user@localhost" if AUTH_DISABLED else None,
     }
 
 

@@ -112,6 +112,19 @@ The server will start on http://localhost:8080
 | `BACKEND_API_URL` | URL of your backend API | Yes | - |
 | `WEB_UI_PORT` | Port for web server | No | 8080 |
 | `API_KEY` | API key for backend auth | No | - |
+| `WEB_UI_BASE_URL` | External URL of web-ui (for OAuth callbacks) | For OAuth | `http://localhost:8080` |
+| `AUTH_DISABLED` | Disable authentication (local/trusted networks) | No | `false` |
+
+### Authentication Modes
+
+**Local/Trusted Network (recommended for Pi deployments):**
+```bash
+AUTH_DISABLED=true
+```
+No login required - all endpoints are accessible. Only use on trusted networks.
+
+**Google OAuth (for public/shared access):**
+Requires Google OAuth setup on the backend. See main DEPLOYMENT.md for details.
 
 ### Connecting to Remote Backend
 

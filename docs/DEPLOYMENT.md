@@ -196,12 +196,13 @@ docker compose up -d
 cd ~/mail-done/web-ui
 
 # Create .env with API key
-# IMPORTANT: Use the Pi's hostname (not localhost) for OAuth redirects to work
 API_KEY=$(grep "^API_KEY=" ../.env | cut -d= -f2)
 cat > .env << EOF
 BACKEND_API_URL=http://$(hostname):8000
 WEB_UI_PORT=8080
 API_KEY=$API_KEY
+WEB_UI_BASE_URL=http://$(hostname):8080
+AUTH_DISABLED=true
 EOF
 
 # Build and run
