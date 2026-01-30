@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env.local
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Local data and logs - these should NEVER be in the container
+email-processor/
+LOG_imapsync/
+*.log
+logs/
+data/
+backups/
+
+# Docker
+.docker/
+Dockerfile*
+docker-compose*.yml
+!docker-compose.yml
+
+# Deploy files (not needed in container)
+deploy/
+
+# Documentation (not needed at runtime)
+docs/
+*.md
+LICENSE
+
+# Config examples (the real configs are mounted)
+config/*.example.yaml
+
+# Web UI (separate container or static build)
+web-ui/
+
+# Environment files
+.env*
+!.env.example
+
+# Test files
+tests/
+test_*.py
+*_test.py
+conftest.py
+pytest.ini
+
+# Misc
+.DS_Store
+Thumbs.db
+*.bak
