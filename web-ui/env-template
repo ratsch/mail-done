@@ -1,0 +1,67 @@
+# =============================================================================
+# Mail-Done Web UI Configuration (ZERO-KNOWLEDGE)
+# =============================================================================
+# Copy this file to .env and fill in your values
+#
+# SECURITY: This Web-UI is ZERO-KNOWLEDGE:
+#   - Uses OAuth for user authentication (no passwords stored)
+#   - Uses signed requests to backend (no API keys needed)
+#   - Has NO database credentials
+#   - Only proxies requests to Railway backend via signed auth
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Railway API Configuration (REQUIRED)
+# -----------------------------------------------------------------------------
+RAILWAY_API_URL=https://your-railway-app.railway.app
+
+# -----------------------------------------------------------------------------
+# Authentication (REQUIRED)
+# -----------------------------------------------------------------------------
+# The Web-UI delegates OAuth to the backend - no Google credentials needed here!
+# The backend handles Google OAuth using per-client-type credentials.
+WEB_UI_BASE_URL=http://localhost:8080
+
+# NOTE: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are NOT needed here!
+# The backend has its own credentials configured for each client type.
+# See: email-processor/config/oauth_policies.yaml
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+WEB_UI_PORT=8080
+
+# Environment: "production" or "development"
+# Development mode enables debug logging and additional CORS origins
+ENVIRONMENT=production
+
+# Enable debug mode for verbose logging (set to "true" to enable)
+# WARNING: Do not enable in production - may log sensitive data
+DEBUG=false
+
+# -----------------------------------------------------------------------------
+# Security Configuration
+# -----------------------------------------------------------------------------
+# Rate limiting - requests per minute (default: 60)
+RATE_LIMIT_RPM=60
+
+# Failed auth attempts before lockout (default: 5)
+RATE_LIMIT_AUTH_PM=5
+
+# Lockout duration in seconds after too many failed attempts (default: 300 = 5 minutes)
+RATE_LIMIT_LOCKOUT_SECONDS=300
+
+# Custom allowed CORS origin (if your frontend is on a different domain)
+# ALLOWED_ORIGIN=https://your-custom-domain.com
+
+# -----------------------------------------------------------------------------
+# macOS Integration (only for local macOS use)
+# -----------------------------------------------------------------------------
+# Enable Mail.app integration features (only works on macOS)
+# Set to "false" when running in Docker or on Railway
+ENABLE_MACOS_FEATURES=true
+
+# IMAP credentials for draft creation (optional, for Mail.app integration)
+# IMAP_HOST=imap.example.com
+# IMAP_USERNAME=your-email@example.com
+# IMAP_PASSWORD=your-imap-password

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/style.css?v=4">
+    <style>
+        /* Login screen - security by obscurity */
+        #login-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        #login-screen.hidden {
+            display: none;
+        }
+        .login-box {
+            text-align: center;
+            padding: 60px 80px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+        }
+        .login-box h1 {
+            color: #e8e8e8;
+            font-size: 1.5rem;
+            margin-bottom: 30px;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+        .login-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 32px;
+            background: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+        }
+        .login-btn:hover {
+            background: #3367d6;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+        }
+        .login-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        /* Hide main app by default */
+        #app-container {
+            display: none;
+        }
+        #app-container.visible {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Screen (shown when not authenticated) -->
+    <div id="login-screen">
+        <div class="login-box">
+            <h1>Authentication Required</h1>
+            <a href="/auth/login" class="login-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/></svg>
+                Sign in with Google
+            </a>
+        </div>
+    </div>
+
+    <!-- Main App (hidden until authenticated) -->
+    <div id="app-container" class="container">
+        <!-- Header -->
+        <header>
+            <h1>📧 Mail-Done Web UI</h1>
+            <p class="subtitle">Email Processing & Semantic Search</p>
+            <div class="header-controls">
+                <div class="form-group" style="display: inline-block; margin-right: 15px;">
+                    <label for="account-selector" style="margin-right: 5px;">Account:</label>
+                    <select id="account-selector" style="padding: 5px 10px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="">All Accounts</option>
+                    </select>
+                </div>
+                <div id="connection-status" class="status-badge">Checking connection...</div>
+                <div id="user-info" style="margin-left: 15px;">
+                    <span id="user-email" style="font-size: 0.9rem; color: #666; margin-right: 10px;"></span>
+                    <button id="logout-button" class="btn btn-secondary" style="padding: 5px 12px; font-size: 0.85rem;">
+                        🚪 Logout
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="tabs">
+            <button class="tab-button active" data-tab="search">🔍 Semantic Search</button>
+            <button class="tab-button" data-tab="browse">📁 Browse by Category</button>
+            <button class="tab-button" data-tab="costs">💰 Cost Overview</button>
+            <button class="tab-button" data-tab="process">⚙️ Process Inbox</button>
+            <button class="tab-button" data-tab="stats">📊 Statistics</button>
+        </nav>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+            <!-- Search Tab -->
+            <div id="search-tab" class="tab-pane active">
+                <div class="panel">
+                    <h2>Semantic Search</h2>
+                    <p class="description">Search your emails using natural language. Try queries like "machine learning papers", "PhD applications", or "meeting invites".</p>
+                    
+                    <div class="search-form">
+                        <div class="form-group">
+                            <input type="text" id="search-query" placeholder="Enter your search query..." />
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="search-mode">Mode:</label>
+                                <select id="search-mode">
+                                    <option value="hybrid" selected>Hybrid (Keyword + Semantic)</option>
+                                    <option value="semantic">Semantic Only</option>
+                                    <option value="keyword">Keyword Only</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="search-limit">Results:</label>
+                                <select id="search-limit">
+                                    <option value="10">10</option>
+                                    <option value="20" selected>20</option>
+                                    <option value="50">50</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="search-date-range">Date Range:</label>
+                                <select id="search-date-range">
+                                    <option value="all">All time</option>
+                                    <option value="7">Last 7 days</option>
+                                    <option value="30">Last 30 days</option>
+                                    <option value="90">Last 90 days</option>
+                                    <option value="180">Last 6 months</option>
+                                    <option value="365" selected>Last year</option>
+                                    <option value="custom">Custom range...</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="search-threshold">Similarity Threshold:</label>
+                                <input type="number" id="search-threshold" min="0" max="1" step="0.05" value="0.3" placeholder="0.3" />
+                                <small>Minimum similarity (0-1). Try 0.3 for broad results, 0.5-0.7 for stricter matching</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="search-hide-handled" />
+                                    Hide handled emails
+                                </label>
+                            </div>
+                            
+                            <button id="search-button" class="btn btn-primary">Search</button>
+                        </div>
+                        
+                        <div id="custom-date-range" class="form-row" style="display: none; margin-top: 15px;">
+                            <div class="form-group">
+                                <label for="search-date-from">From:</label>
+                                <input type="date" id="search-date-from" />
+                            </div>
+                            <div class="form-group">
+                                <label for="search-date-to">To:</label>
+                                <input type="date" id="search-date-to" />
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="search-results" class="results"></div>
+                </div>
+            </div>
+
+            <!-- Browse by Category Tab -->
+            <div id="browse-tab" class="tab-pane">
+                <div class="panel">
+                    <h2>Browse Emails by Category</h2>
+                    <p class="description">View your emails organized by AI-classified categories, sorted by most recent first.</p>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="category-select">Select Category:</label>
+                            <select id="category-select">
+                                <option value="">Loading categories...</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="browse-limit">Emails per page:</label>
+                            <select id="browse-limit">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="hide-handled" checked />
+                                Hide handled emails
+                            </label>
+                        </div>
+                        
+                        <button id="browse-button" class="btn btn-primary">Load Emails</button>
+                    </div>
+                    
+                    <div id="browse-results" class="browse-results"></div>
+                </div>
+            </div>
+
+            <!-- Costs Tab -->
+            <div id="costs-tab" class="tab-pane">
+                <div class="panel">
+                    <h2>Cost Overview</h2>
+                    <p class="description">Track your OpenAI API usage and costs</p>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Today</div>
+                            <div class="stat-value" id="cost-today">$0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">This Month</div>
+                            <div class="stat-value" id="cost-month">$0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value" id="cost-total">$0.00</div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row" style="margin-top: 20px;">
+                        <div class="form-group">
+                            <label for="cost-days">Analysis Period:</label>
+                            <select id="cost-days">
+                                <option value="7">Last 7 days</option>
+                                <option value="30" selected>Last 30 days</option>
+                                <option value="90">Last 90 days</option>
+                            </select>
+                        </div>
+                        <button id="refresh-costs-button" class="btn btn-secondary">Refresh</button>
+                    </div>
+                    
+                    <div id="cost-details" class="cost-details"></div>
+                </div>
+            </div>
+
+            <!-- Process Tab -->
+            <div id="process-tab" class="tab-pane">
+                <div class="panel">
+                    <h2>Process Inbox</h2>
+                    <p class="description">Trigger email processing to classify new emails and generate embeddings</p>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="process-new-only" checked />
+                            Process new emails only (unseen)
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="process-limit">Limit:</label>
+                        <input type="number" id="process-limit" value="100" min="1" max="10000" />
+                        <small>Maximum number of emails to process (ignored if "new only" is checked)</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="process-dry-run" />
+                            Dry run (preview without making changes)
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="process-use-ai" checked />
+                            Use AI classification
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="process-embeddings" checked />
+                            Generate embeddings for semantic search
+                        </label>
+                    </div>
+                    
+                    <button id="process-button" class="btn btn-primary">Start Processing</button>
+                    
+                    <div id="process-status" class="process-status"></div>
+                </div>
+            </div>
+
+            <!-- Stats Tab -->
+            <div id="stats-tab" class="tab-pane">
+                <div class="panel">
+                    <h2>Email Statistics</h2>
+                    <p class="description">Overview of your email database</p>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Emails</div>
+                            <div class="stat-value" id="stat-total">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">With Embeddings</div>
+                            <div class="stat-value" id="stat-embeddings">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">AI Classifications</div>
+                            <div class="stat-value" id="stat-ai">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Needs Reply</div>
+                            <div class="stat-value" id="stat-reply">0</div>
+                        </div>
+                    </div>
+                    
+                    <button id="refresh-stats-button" class="btn btn-secondary" style="margin-top: 20px;">Refresh Stats</button>
+                    
+                    <!-- Sub-tabs for Categories vs Folders -->
+                    <div class="stats-subtabs" style="margin-top: 30px;">
+                        <button class="stats-subtab-button active" data-subtab="categories">📋 Top Categories</button>
+                        <button class="stats-subtab-button" data-subtab="folders">📁 Emails by Folder</button>
+                    </div>
+                    
+                    <div id="category-breakdown" class="breakdown-container"></div>
+                    <div id="folder-breakdown" class="breakdown-container" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </div><!-- end app-container -->
+
+    <!-- Category Suggestion Modal -->
+    <div id="category-modal" class="modal">
+        <div class="modal-content">
+            <h3>Wrong Category</h3>
+            <p id="category-modal-text">This email is currently categorized as <strong id="current-category-text"></strong>.</p>
+            <p>What should it be instead?</p>
+            
+            <div class="form-group">
+                <select id="suggested-category-select">
+                    <option value="">Select a category...</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="custom-category-group" style="display: none;">
+                <label for="custom-category-input">Custom Category:</label>
+                <input type="text" id="custom-category-input" placeholder="Enter category name" />
+            </div>
+            
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeCategoryModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitCategoryFeedback()">Submit Feedback</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=4"></script>
+</body>
+</html>
+

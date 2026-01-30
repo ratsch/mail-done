@@ -1,0 +1,116 @@
+# mail-done Deployment for Raspberry Pi / ARM64
+#
+# Optimized for Raspberry Pi with Podman
+# Uses host networking for simplicity with Tailscale
+#
+# Usage:
+#   # On the Pi, clone the repo and configure
+#   git clone <repo-url> mail-done
+#   cd mail-done
+#   cp .env.example .env
+#   vim .env  # Set your credentials
+#
+#   # Start with podman-compose
+#   podman-compose -f deploy/docker-compose.pi.yml up -d
+#
+#   # View logs
+#   podman-compose -f deploy/docker-compose.pi.yml logs -f api
+
+services:
+  # ==========================================================================
+  # PostgreSQL with pgvector (runs on host network)
+  # ==========================================================================
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: mail-done-db
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-email_processor}
+      PGPORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - mail-done-db-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d email_processor -p ${POSTGRES_PORT:-5432}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ==========================================================================
+  # Backend API (host network for Tailscale exposure)
+  # ==========================================================================
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: mail-done-api
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      PORT: ${API_PORT:-8000}
+      # Use localhost since we're on host network
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-email_processor}
+    volumes:
+      # Mount config directory
+      - ../config:/app/config:ro
+      # Optional: External config overlay
+      # - ${CONFIG_DIR}:/app/config:ro
+      # Optional: Google service account
+      # - ./service-account.json:/app/service-account.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${API_PORT:-8000}/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ==========================================================================
+  # Tailscale Sidecar (Optional - exposes API via Tailscale)
+  # ==========================================================================
+  # Uncomment to expose the API on your Tailscale network
+  # Requires: TS_AUTHKEY in environment or ts-services.env file
+  #
+  # tailscale:
+  #   image: docker.io/tailscale/tailscale:latest
+  #   container_name: mail-done-ts
+  #   restart: unless-stopped
+  #   hostname: mail-done-ts
+  #   network_mode: host
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_MODULE
+  #   volumes:
+  #     - mail-done-ts-state:/var/lib/tailscale
+  #   environment:
+  #     TS_HOSTNAME: ${TS_HOSTNAME:-mail-done}
+  #     TS_STATE_DIR: /var/lib/tailscale
+  #     TS_USERSPACE: "true"
+  #     TS_AUTHKEY: ${TS_AUTHKEY:-}
+  #   entrypoint: ["/bin/sh", "-c"]
+  #   command:
+  #     - |
+  #       /usr/local/bin/containerboot &
+  #       sleep 15
+  #       tailscale serve --bg ${API_PORT:-8000}
+  #       wait
+
+volumes:
+  mail-done-db-data:
+    name: mail-done-db-data
+  # mail-done-ts-state:
+  #   name: mail-done-ts-state

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Categories</title>
+</head>
+<body>
+    <h1>Test Category Loading</h1>
+    <button onclick="testCategories()">Test Load Categories</button>
+    <pre id="output"></pre>
+    <select id="category-select">
+        <option>Loading...</option>
+    </select>
+    
+    <script>
+        async function testCategories() {
+            const output = document.getElementById('output');
+            const categorySelect = document.getElementById('category-select');
+            
+            try {
+                console.log('Fetching stats...');
+                const response = await fetch('/api/stats');
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const stats = await response.json();
+                console.log('Stats data:', stats);
+                output.textContent = JSON.stringify(stats, null, 2);
+                
+                const categories = stats.top_categories || stats.categories_breakdown || {};
+                console.log('Categories:', categories);
+                
+                if (Object.keys(categories).length === 0) {
+                    categorySelect.innerHTML = '<option>No categories</option>';
+                } else {
+                    const sorted = Object.entries(categories).sort((a, b) => b[1] - a[1]);
+                    categorySelect.innerHTML = sorted.map(([cat, count]) => 
+                        `<option value="${cat}">${cat} (${count})</option>`
+                    ).join('');
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                output.textContent = 'Error: ' + error.message;
+                categorySelect.innerHTML = '<option>Error loading</option>';
+            }
+        }
+        
+        // Auto-run on load
+        testCategories();
+    </script>
+</body>
+</html>
+
