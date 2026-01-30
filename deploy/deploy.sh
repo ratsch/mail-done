@@ -121,6 +121,24 @@ set -a
 source .env
 set +a
 
+# Check config overlay
+if [ -n "$CONFIG_DIR" ]; then
+    if [ -d "$CONFIG_DIR" ]; then
+        echo "Using private config overlay: $CONFIG_DIR"
+    else
+        echo ""
+        echo "ERROR: CONFIG_DIR is set but directory does not exist: $CONFIG_DIR"
+        echo ""
+        echo "Either:"
+        echo "  1. Create/clone the config directory at $CONFIG_DIR"
+        echo "  2. Or remove CONFIG_DIR from .env to use default configs"
+        exit 1
+    fi
+else
+    echo "Using default config: $PROJECT_DIR/config"
+fi
+
+echo ""
 echo "Building containers..."
 $COMPOSE_CMD -f "$COMPOSE_FILE" build
 

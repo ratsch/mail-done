@@ -71,10 +71,8 @@ services:
       # Use localhost since we're on host network
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-email_processor}
     volumes:
-      # Mount config directory
-      - ../config:/app/config:ro
-      # Optional: External config overlay
-      # - ${CONFIG_DIR}:/app/config:ro
+      # Mount config directory (uses CONFIG_DIR if set, otherwise default)
+      - ${CONFIG_DIR:-../config}:/app/config:ro
       # Optional: Google service account
       # - ./service-account.json:/app/service-account.json:ro
     healthcheck:

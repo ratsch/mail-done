@@ -239,76 +239,146 @@ For schema details and direct queries, see [docs/DATABASE.md](DATABASE.md).
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `AZURE_OPENAI_DEPLOYMENT` | Deployment name (e.g., gpt-4o) |
 
-## Custom Configuration Overlay
+## Private Configuration Overlay
 
-For private configurations (VIP lists, custom prompts), use the overlay system to keep sensitive data in a separate private repository.
+> **⚠️ Important:** The config overlay must exist on **both** your local machine (for running `process_inbox.py`) **and** on the deployment target (Pi/server). Otherwise, local processing and the deployed API will use different configurations.
 
-### Why Use Overlays?
+### Why Use a Private Overlay?
 
-- Keep VIP sender lists private (not in public repo)
-- Customize prompts for your organization
-- Share base codebase while personalizing rules
+- **VIP sender lists**: Keep your priority contacts private
+- **Classification rules**: Customize for your organization
+- **Email accounts**: Your IMAP server settings
+- **Custom prompts**: Organization-specific AI instructions
 
-### Step-by-Step Setup
+### How It Works
 
-#### 1. Create Private Config Repository
+```
+Local machine                    Raspberry Pi / Server
+─────────────────                ─────────────────────
+~/mail-done-config/      ──sync──>   ~/mail-done-config/
+       │                                    │
+       ▼                                    ▼
+process_inbox.py               FastAPI (deployed)
+(uses CONFIG_DIR)              (mounts CONFIG_DIR)
+```
+
+**Both** use the same config, ensuring consistent behavior.
+
+### Step 1: Create Private Config Repository
+
+On your **local machine**:
 
 ```bash
-# Create separate private repo
+# Create private config repo
 mkdir ~/mail-done-config
 cd ~/mail-done-config
 git init
 
-# Create directory structure
-mkdir -p prompts
+# Create on GitHub/GitLab as a PRIVATE repo
+# git remote add origin git@github.com:you/mail-done-config.git
 ```
 
-#### 2. Copy Configs to Overlay
+### Step 2: Copy and Customize Configs
 
 ```bash
-# Copy only files you want to customize
+# Copy configs you need to customize
+cp ~/mail-done/config/accounts.example.yaml ~/mail-done-config/accounts.yaml
 cp ~/mail-done/config/vip_senders.example.yaml ~/mail-done-config/vip_senders.yaml
 cp ~/mail-done/config/classification_rules.example.yaml ~/mail-done-config/classification_rules.yaml
+cp ~/mail-done/config/ai_category_actions.example.yaml ~/mail-done-config/ai_category_actions.yaml
 
-# Edit with your private settings
+# Edit with your settings
+vim ~/mail-done-config/accounts.yaml
 vim ~/mail-done-config/vip_senders.yaml
 ```
 
-#### 3. Configure Overlay Paths
+### Step 3: Configure Local Environment
 
-Add to `.env`:
+Add to your **local** `.env` or shell profile:
+
 ```bash
-CONFIG_DIR=/home/user/mail-done-config
-PROMPTS_DIR=/home/user/mail-done-config/prompts
+export CONFIG_DIR=~/mail-done-config
+export PROMPTS_DIR=~/mail-done-config/prompts  # Optional
 ```
 
-#### 4. Mount in Deployment
+Now `process_inbox.py` locally will use your private config.
 
-For Docker, the compose file already supports this via environment variable.
+### Step 4: Deploy Config to Pi/Server
 
-For Podman manual deployment:
+**Option A: Git clone (recommended)**
+
 ```bash
-podman run -d \
-    -v "${CONFIG_DIR:-$PWD/config}:/app/config:ro" \
-    ...
+# On the Pi/server
+cd ~
+git clone git@github.com:you/mail-done-config.git mail-done-config
+```
+
+**Option B: rsync**
+
+```bash
+# From local machine
+rsync -avz ~/mail-done-config/ pi@your-pi:~/mail-done-config/
+```
+
+### Step 5: Configure Deployment to Use Overlay
+
+Add to `.env` on the Pi (in the mail-done directory):
+
+```bash
+CONFIG_DIR=/home/pi/mail-done-config
+```
+
+The deployment script (`deploy-pi.sh`) automatically:
+1. Checks if `CONFIG_DIR` is set in `.env`
+2. Verifies the directory exists
+3. Mounts it into the container
+
+### Keeping Configs in Sync
+
+When you update your private config locally:
+
+```bash
+# Local: commit and push
+cd ~/mail-done-config
+git add -A && git commit -m "Update VIP list"
+git push
+
+# On Pi: pull updates and restart
+ssh pi@your-pi
+cd ~/mail-done-config && git pull
+cd ~/mail-done && ./deploy/deploy-pi.sh --stop && ./deploy/deploy-pi.sh
 ```
 
 ### Overlay Directory Structure
 
 ```
-mail-done-config/           # Your private repo
-├── vip_senders.yaml        # VIP definitions (private)
-├── classification_rules.yaml
-├── ai_category_actions.yaml
-├── accounts.yaml           # Your email accounts
-└── prompts/                # Custom AI prompts
-    └── classifier.txt
+mail-done-config/               # Your private repo
+├── accounts.yaml               # Email server settings (REQUIRED)
+├── vip_senders.yaml            # Priority senders
+├── classification_rules.yaml   # Rule-based sorting
+├── ai_category_actions.yaml    # Folder moves per category
+├── categories.yaml             # Category definitions
+└── prompts/                    # Custom AI prompts (optional)
+    └── classifier_system.txt
 ```
 
-### Overlay Precedence
+### Overlay Behavior
 
-Files in `CONFIG_DIR` completely **replace** defaults (no merging).
-Missing files fall back to the default `config/` directory.
+- Files in `CONFIG_DIR` **replace** the defaults completely
+- If a file is missing from overlay, the default from `config/` is used
+- No merging occurs - it's all-or-nothing per file
+
+### Verification
+
+Check which config is being used:
+
+```bash
+# On Pi - check what's mounted
+podman exec mail-done-api ls -la /app/config/
+
+# Check logs for config path
+podman logs mail-done-api 2>&1 | grep -i config
+```
 
 ## Monitoring
 

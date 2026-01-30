@@ -111,6 +111,41 @@ setup_environment() {
 }
 
 # =============================================================================
+# Config overlay check
+# =============================================================================
+check_config_overlay() {
+    log_info "Checking config overlay..."
+    cd "$PROJECT_DIR"
+
+    # Check if CONFIG_DIR is set in .env
+    if [ -f ".env" ]; then
+        CONFIG_DIR_FROM_ENV=$(grep "^CONFIG_DIR=" .env 2>/dev/null | cut -d= -f2)
+        if [ -n "$CONFIG_DIR_FROM_ENV" ]; then
+            export CONFIG_DIR="$CONFIG_DIR_FROM_ENV"
+        fi
+    fi
+
+    if [ -n "$CONFIG_DIR" ]; then
+        if [ -d "$CONFIG_DIR" ]; then
+            log_info "Private config overlay found: $CONFIG_DIR"
+            ls -la "$CONFIG_DIR"/*.yaml 2>/dev/null | head -5 || true
+        else
+            log_error "CONFIG_DIR is set but directory does not exist: $CONFIG_DIR"
+            echo ""
+            echo "To use a private config overlay:"
+            echo "  1. Clone your private config repo to the Pi:"
+            echo "     git clone git@github.com:you/mail-done-config.git $CONFIG_DIR"
+            echo ""
+            echo "  2. Or unset CONFIG_DIR in .env to use default configs"
+            echo ""
+            exit 1
+        fi
+    else
+        log_info "No CONFIG_DIR set, using default config from $PROJECT_DIR/config"
+    fi
+}
+
+# =============================================================================
 # Config files setup
 # =============================================================================
 setup_config_files() {
@@ -194,6 +229,16 @@ build_and_start() {
     log_info "Starting API..."
     API_PORT=${API_PORT:-8000}
     POSTGRES_PORT=${POSTGRES_PORT:-5432}
+
+    # Determine config directory - use CONFIG_DIR if set, otherwise default
+    if [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ]; then
+        MOUNT_CONFIG_DIR="$CONFIG_DIR"
+        log_info "Using private config overlay: $CONFIG_DIR"
+    else
+        MOUNT_CONFIG_DIR="$PROJECT_DIR/config"
+        log_info "Using default config: $PROJECT_DIR/config"
+    fi
+
     podman run -d \
         --name mail-done-api \
         --network host \
@@ -201,7 +246,7 @@ build_and_start() {
         --env-file "$PROJECT_DIR/.env" \
         -e PORT="$API_PORT" \
         -e DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB:-email_processor}" \
-        -v "$PROJECT_DIR/config:/app/config:ro" \
+        -v "$MOUNT_CONFIG_DIR:/app/config:ro" \
         localhost/deploy_api:latest || {
             log_warn "Container may already exist. Trying to start..."
             podman start mail-done-api
@@ -348,6 +393,7 @@ main() {
         deploy|"")
             check_prerequisites
             setup_environment
+            check_config_overlay
             setup_config_files
             build_and_start
 

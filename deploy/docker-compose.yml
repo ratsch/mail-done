@@ -66,10 +66,8 @@ services:
       PORT: 8000
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-email_processor}
     volumes:
-      # Mount config directory (can be overridden with external config)
-      - ../config:/app/config:ro
-      # Optional: Mount external config overlay
-      # - ${CONFIG_DIR:-../config}:/app/config:ro
+      # Mount config directory (uses CONFIG_DIR if set, otherwise default)
+      - ${CONFIG_DIR:-../config}:/app/config:ro
       # Optional: Mount Google service account for Drive integration
       # - ./service-account.json:/app/service-account.json:ro
     healthcheck:
