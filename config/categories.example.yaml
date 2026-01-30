@@ -1,17 +1,81 @@
 # Email Categories Configuration
-# Categories are loaded dynamically - add your custom categories via CONFIG_DIR overlay.
+# =============================================================================
+# Categories are loaded dynamically at runtime.
+# Copy this file to categories.yaml and customize, or use CONFIG_DIR overlay.
+#
 # Format: category-name: "category-name"
+# The key and value should match (for enum compatibility)
+# =============================================================================
 
 categories:
-  # Work
+  # ===========================================================================
+  # Work (7)
+  # ===========================================================================
   work-urgent: "work-urgent"
   work-colleague: "work-colleague"
   work-student: "work-student"
   work-admin: "work-admin"
   work-scheduling: "work-scheduling"
+  work-no-action-needed: "work-no-action-needed"
   work-other: "work-other"
 
-  # Travel
+  # ===========================================================================
+  # Applications (6)
+  # ===========================================================================
+  application-phd: "application-phd"
+  application-postdoc: "application-postdoc"
+  application-intern: "application-intern"
+  application-bsc-msc-thesis: "application-bsc-msc-thesis"
+  application-visiting: "application-visiting"
+  application-other: "application-other"
+
+  # ===========================================================================
+  # Invitations (7)
+  # ===========================================================================
+  invitation-speaking: "invitation-speaking"
+  invitation-committee: "invitation-committee"
+  invitation-grant: "invitation-grant"
+  invitation-editorial: "invitation-editorial"
+  invitation-advisory: "invitation-advisory"
+  invitation-event: "invitation-event"
+  invitation-collaboration: "invitation-collaboration"
+
+  # ===========================================================================
+  # Reviews (7)
+  # ===========================================================================
+  review-peer-journal: "review-peer-journal"
+  review-peer-conference: "review-peer-conference"
+  review-grant: "review-grant"
+  review-phd-committee: "review-phd-committee"
+  review-hiring: "review-hiring"
+  review-promotion: "review-promotion"
+  review-other: "review-other"
+
+  # ===========================================================================
+  # Publications (7)
+  # ===========================================================================
+  publication-submission-confirm: "publication-submission-confirm"
+  publication-decision-accept: "publication-decision-accept"
+  publication-decision-reject: "publication-decision-reject"
+  publication-revision-request: "publication-revision-request"
+  publication-proofs: "publication-proofs"
+  publication-published: "publication-published"
+  publication-other: "publication-other"
+
+  # ===========================================================================
+  # Grants (7)
+  # ===========================================================================
+  grant-submission-confirm: "grant-submission-confirm"
+  grant-decision-awarded: "grant-decision-awarded"
+  grant-decision-rejected: "grant-decision-rejected"
+  grant-budget: "grant-budget"
+  grant-reporting: "grant-reporting"
+  grant-modification: "grant-modification"
+  grant-other: "grant-other"
+
+  # ===========================================================================
+  # Travel (6)
+  # ===========================================================================
   travel-booking-confirm: "travel-booking-confirm"
   travel-receipt: "travel-receipt"
   travel-itinerary: "travel-itinerary"
@@ -19,35 +83,71 @@ categories:
   travel-transport: "travel-transport"
   travel-other: "travel-other"
 
-  # Newsletters
+  # ===========================================================================
+  # Real Estate (7)
+  # ===========================================================================
+  immo-listing: "immo-listing"
+  immo-notification: "immo-notification"
+  immo-newsletter: "immo-newsletter"
+  immo-viewing: "immo-viewing"
+  immo-offer: "immo-offer"
+  immo-financing: "immo-financing"
+  immo-other: "immo-other"
+
+  # ===========================================================================
+  # Short-term Rentals (1)
+  # ===========================================================================
+  airbnb-host: "airbnb-host"
+
+  # ===========================================================================
+  # Newsletters (2)
+  # ===========================================================================
   newsletter-scientific: "newsletter-scientific"
   newsletter-general: "newsletter-general"
 
-  # Notifications
+  # ===========================================================================
+  # Notifications (5)
+  # ===========================================================================
   notification-system: "notification-system"
   notification-technical: "notification-technical"
   notification-calendar: "notification-calendar"
   notification-social: "notification-social"
   notification-other: "notification-other"
 
-  # Receipts
+  # ===========================================================================
+  # Receipts (4)
+  # ===========================================================================
   receipt-online: "receipt-online"
   receipt-travel: "receipt-travel"
   receipt-subscription: "receipt-subscription"
+  receipt-reimbursement: "receipt-reimbursement"
 
-  # Personal
+  # ===========================================================================
+  # Personal (8)
+  # ===========================================================================
   personal-family: "personal-family"
   personal-friends: "personal-friends"
+  personal-transaction: "personal-transaction"
+  personal-health: "personal-health"
+  personal-hobby: "personal-hobby"
+  personal-travel: "personal-travel"
+  personal-shopping: "personal-shopping"
   personal-other: "personal-other"
 
-  # Other
+  # ===========================================================================
+  # Other (3)
+  # ===========================================================================
   marketing: "marketing"
   spam: "spam"
   social-media: "social-media"
 
-  # Legacy/compatibility
+  # ===========================================================================
+  # Legacy/Compatibility (5)
+  # These map to *-other variants in the AI classifier
+  # ===========================================================================
   personal: "personal"
   work: "work"
   receipt: "receipt"
   newsletter: "newsletter"
   notification: "notification"
+  cold_email: "cold_email"
