@@ -148,16 +148,37 @@ build_and_start() {
     source .env
     set +a
 
+    # Build using podman-compose (this works fine)
     podman-compose -f "$COMPOSE_FILE" build
 
-    log_info "Starting services..."
-    podman-compose -f "$COMPOSE_FILE" up -d
+    # Start services using direct podman commands
+    # (podman-compose has a bug with host networking where it adds --net default)
+    log_info "Starting services with direct podman commands..."
 
-    log_info "Waiting for services to be ready..."
-    sleep 15
+    # Create volume if needed
+    podman volume inspect mail-done-db-data &>/dev/null || \
+        podman volume create mail-done-db-data
 
-    # Check database health
-    log_info "Checking database health..."
+    # Start PostgreSQL
+    log_info "Starting database..."
+    podman run -d \
+        --name mail-done-db \
+        --network host \
+        --restart unless-stopped \
+        -e POSTGRES_USER="${POSTGRES_USER:-postgres}" \
+        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+        -e POSTGRES_DB="${POSTGRES_DB:-email_processor}" \
+        -e PGPORT="${POSTGRES_PORT:-5432}" \
+        -v mail-done-db-data:/var/lib/postgresql/data \
+        -v "$PROJECT_DIR/deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
+        --memory 1g \
+        --memory-reservation 256m \
+        pgvector/pgvector:pg16 || {
+            log_warn "Container may already exist. Trying to start..."
+            podman start mail-done-db
+        }
+
+    log_info "Waiting for database to be ready..."
     for i in {1..30}; do
         if podman exec mail-done-db pg_isready -U postgres -d email_processor &>/dev/null; then
             log_info "Database is ready."
@@ -170,9 +191,24 @@ build_and_start() {
         sleep 2
     done
 
-    # Check API health
-    log_info "Checking API health..."
+    # Start API
+    log_info "Starting API..."
     API_PORT=${API_PORT:-8000}
+    POSTGRES_PORT=${POSTGRES_PORT:-5432}
+    podman run -d \
+        --name mail-done-api \
+        --network host \
+        --restart unless-stopped \
+        --env-file "$PROJECT_DIR/.env" \
+        -e PORT="$API_PORT" \
+        -e DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB:-email_processor}" \
+        -v "$PROJECT_DIR/config:/app/config:ro" \
+        localhost/deploy_api:latest || {
+            log_warn "Container may already exist. Trying to start..."
+            podman start mail-done-api
+        }
+
+    log_info "Waiting for API to be ready..."
     for i in {1..30}; do
         if curl -s "http://localhost:$API_PORT/health" &>/dev/null; then
             log_info "API is healthy at http://localhost:$API_PORT"
@@ -201,12 +237,21 @@ clean_deployment() {
         set +a
     fi
 
-    # Stop and remove containers
-    podman-compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+    # Stop and remove containers using direct podman commands
+    log_info "Stopping containers..."
+    podman stop mail-done-api 2>/dev/null || true
+    podman stop mail-done-db 2>/dev/null || true
+
+    log_info "Removing containers..."
+    podman rm mail-done-api 2>/dev/null || true
+    podman rm mail-done-db 2>/dev/null || true
+
+    log_info "Removing volume..."
+    podman volume rm mail-done-db-data 2>/dev/null || true
 
     # Remove images
-    podman rmi mail-done-api 2>/dev/null || true
-    podman rmi localhost/mail-done_api 2>/dev/null || true
+    podman rmi deploy_api 2>/dev/null || true
+    podman rmi localhost/deploy_api 2>/dev/null || true
 
     # Remove config files (but keep .env)
     log_info "Removing generated config files..."
@@ -236,16 +281,14 @@ show_status() {
     fi
 
     echo ""
-    podman-compose -f "$COMPOSE_FILE" ps 2>/dev/null || echo "No services running."
-
-    echo ""
     log_info "Container status:"
-    podman ps -a --filter "name=mail-done" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    podman ps -a --filter "name=mail-done" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 
     echo ""
     API_PORT=${API_PORT:-8000}
     if curl -s "http://localhost:$API_PORT/health" &>/dev/null; then
         log_info "API health: OK"
+        curl -s "http://localhost:$API_PORT/health" | python3 -m json.tool 2>/dev/null || true
     else
         log_warn "API health: NOT RESPONDING"
     fi
@@ -258,13 +301,8 @@ stop_services() {
     log_info "Stopping services..."
     cd "$PROJECT_DIR"
 
-    if [ -f ".env" ]; then
-        set -a
-        source .env
-        set +a
-    fi
-
-    podman-compose -f "$COMPOSE_FILE" down
+    podman stop mail-done-api 2>/dev/null || true
+    podman stop mail-done-db 2>/dev/null || true
     log_info "Services stopped."
 }
 
@@ -272,15 +310,16 @@ stop_services() {
 # Show logs
 # =============================================================================
 show_logs() {
-    cd "$PROJECT_DIR"
-
-    if [ -f ".env" ]; then
-        set -a
-        source .env
-        set +a
-    fi
-
-    podman-compose -f "$COMPOSE_FILE" logs -f
+    # Show combined logs from both containers
+    echo "=== Database logs (last 50 lines) ==="
+    podman logs --tail 50 mail-done-db 2>/dev/null || echo "No database container"
+    echo ""
+    echo "=== API logs (last 50 lines) ==="
+    podman logs --tail 50 mail-done-api 2>/dev/null || echo "No API container"
+    echo ""
+    echo "To follow logs, use:"
+    echo "  podman logs -f mail-done-api"
+    echo "  podman logs -f mail-done-db"
 }
 
 # =============================================================================
