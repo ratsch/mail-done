@@ -492,13 +492,13 @@ API Documentation:
 ✓ API has endpoints defined (91 found)
 
 Authentication Enforcement:
-✓ Stats requires auth (401)
-✓ Emails requires auth (401)
-✓ Admin endpoints require auth (401)
-✓ Applications requires auth (401)
+✓ Stats requires auth
+✓ Emails requires auth
+✓ Admin endpoints require auth
+✓ Applications requires auth
 
 ============================================================
-  All 13 tests passed!
+  All 12 tests passed!
   Deployment is working correctly.
 ============================================================
 ```
@@ -530,7 +530,7 @@ podman run -d \
     -e PGPORT="${POSTGRES_PORT:-5432}" \
     -v mail-done-db-data:/var/lib/postgresql/data \
     -v "$PWD/deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
-    pgvector/pgvector:pg16
+    docker.io/pgvector/pgvector:pg16
 
 # Wait for database
 sleep 10
