@@ -1,0 +1,25 @@
+[Unit]
+Description=mail-done Email Processing Service
+Documentation=https://github.com/your-repo/mail-done
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/mail-done
+ExecStart=/usr/bin/podman-compose -f deploy/docker-compose.pi.yml up
+ExecStop=/usr/bin/podman-compose -f deploy/docker-compose.pi.yml down
+Restart=on-failure
+RestartSec=10
+
+# Environment
+Environment=PODMAN_USERNS=keep-id
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mail-done
+
+[Install]
+WantedBy=multi-user.target

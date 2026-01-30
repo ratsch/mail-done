@@ -94,6 +94,28 @@ if [ ! -f ".env" ]; then
     read -p "Press Enter to continue after configuring .env..."
 fi
 
+# Copy config examples if not already configured
+echo "Checking config files..."
+CONFIG_CREATED=false
+for example in config/*.example.yaml; do
+    [ -f "$example" ] || continue
+    target="${example%.example.yaml}.yaml"
+    if [ ! -f "$target" ]; then
+        cp "$example" "$target"
+        echo "  Created: $(basename "$target")"
+        CONFIG_CREATED=true
+    fi
+done
+
+if $CONFIG_CREATED; then
+    echo ""
+    echo "Config files created from examples."
+    echo "You may want to customize them in config/*.yaml"
+    echo ""
+else
+    echo "  All config files already exist."
+fi
+
 # Load environment
 set -a
 source .env
