@@ -1,0 +1,60 @@
+# VIP Senders Configuration
+#
+# Define VIP senders with priority levels for accelerated handling.
+# VIPs are color-coded in Apple Mail and can be forwarded to priority inbox.
+#
+# Priority Levels:
+#   urgent  - Red color (1), highest priority, immediate attention
+#   high    - Orange color (2), important, respond same day
+#   medium  - Yellow color (3), notable, respond within 2 days
+#
+# Usage:
+#   1. Add email addresses to appropriate priority levels
+#   2. VIP rules are processed first (priority 1-3)
+#   3. Emails are color-coded in Apple Mail for easy identification
+#   4. Optional: Forward to separate priority inbox
+
+vip_senders:
+  # URGENT - Immediate attention required (Red)
+  urgent:
+    - ceo@company.com
+    - board@company.com
+    # Add more urgent VIP senders here
+
+  # HIGH - Important, respond same day (Orange)
+  high:
+    - manager@company.com
+    - important-client@example.com
+    # Add more high-priority VIP senders here
+
+  # MEDIUM - Notable, respond within 2 days (Yellow)
+  medium:
+    - colleague@company.com
+    # Add your medium-priority VIP senders here
+
+# VIP Domain Patterns (optional)
+# Match entire domains as VIP (useful for executive team, board members)
+vip_domains:
+  urgent:
+    - executive-team@company.com
+
+  high:
+    - board@company.com
+
+# VIP Rules Configuration
+vip_settings:
+  # Whether to forward VIP emails to a separate inbox
+  forward_urgent_vips: false
+  forward_address: "priority@company.com"
+
+  # Whether to add VIP keyword flag (visible in Mail.app)
+  add_vip_flag: true
+
+  # Whether to log VIP emails separately
+  log_vip_emails: true
+
+  # Notification settings (Phase 2)
+  # notifications:
+  #   urgent: true    # Send push notification for urgent VIPs
+  #   high: false
+  #   medium: false

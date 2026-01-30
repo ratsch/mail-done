@@ -1,0 +1,85 @@
+# Two-Stage Urgency Verification Configuration
+#
+# Ensures high-urgency emails are accurately classified and scored
+#
+# Strategy:
+# - Stage 1: gpt-5-mini (fast, all emails)
+# - Stage 2: gpt-5 (verify urgency for critical emails)
+#
+# Problem addressed:
+# - 15% of truly urgent emails (urgency ≥7) are under-scored by gpt-5-mini
+# - 25% of work-urgent emails are misclassified entirely
+# - Hidden urgent emails in work-colleague/student/admin categories
+
+# Models
+fast_model: "gpt-5-mini"      # Stage 1: Fast classification
+detailed_model: "gpt-5.1"        # Stage 2: Urgency verification
+
+# Trigger criteria (run Stage 2 if ANY condition matches)
+stage_2_criteria:
+  
+  # 1. Verify work-urgent classification (low volume, high stakes)
+  work-urgent:
+    verify: true  # Always run Stage 2 to confirm urgency and category
+  
+  # 2. Work categories with high urgency claim (catch hidden urgent emails)
+  work-colleague:
+    urgency_score: 8  # If urgency ≥8, verify
+    # Note: confidence_max would trigger 0 emails (all work-colleague have conf ≥0.9)
+    # But urgency>=8 catches truly urgent work-colleague emails
+  
+  work-student:
+    urgency_score: 8
+  
+  work-admin:
+    urgency_score: 8
+  
+  work-other:
+    urgency_score: 8
+  
+  # Note: This catches the "hidden" urgent emails that are:
+  # - Classified as regular work (not work-urgent)
+  # - But have high urgency scores (≥8)
+  # - Need verification to confirm true urgency
+  
+  # 3. High-stakes invitation categories (rare but critical)
+  invitation-collaboration:
+    # Always verify (rare, often confused with work-colleague)
+    verify: true
+  
+  invitation-speaking:
+    # Always verify (rare, confused with marketing/events)
+    verify: true
+
+# What to do with Stage 2 results
+combine_strategy:
+  category: "stage2"      # Trust Stage 2 for category (more accurate)
+  urgency_score: "stage2" # Take max urgency (don't miss urgent)
+  urgency: "stage2"       # Trust Stage 2 for urgency level (urgent/normal/low)
+  other_scores: "stage2"  # Trust Stage 2 for other attributes
+
+# Notes:
+# Expected volume (from 200-email profiling):
+# - work-urgent: ~3/day
+# - work-* with urgency ≥8: ~6/day
+# - invitation-speaking: ~7.5/day
+# - invitation-collaboration: ~4.5/day
+# - work-colleague (conf <=0.7): 0/day (gpt-5-mini very confident on this category!)
+# - Total: ~21/day
+#
+# Monthly cost (300 emails/day):
+# - Stage 2: ~21 emails/day × $0.027/email × 30 days = ~$17.01/month
+# - Combined with applications: ~$27/month total Stage 2
+# - TOTAL: $6.52 (Stage 1) + $27 (Stage 2) = $33.52/month
+#
+# Benefits:
+# - Catches hidden urgent emails (urgency ≥8 in work categories)
+# - Verifies work-urgent classification (75% error rate)
+# - Prevents missing high-value speaking/collaboration invitations
+# - Minimal work-colleague overhead (high confidence, only urgent ones verified)
+#
+# Trade-offs:
+# - work-colleague has 44% accuracy but gpt-5-mini is very confident (0.9+)
+# - Urgency ≥8 filter catches the truly urgent work-colleague emails
+# - Other work-colleague errors are lower-stakes (scheduling, admin confusions)
+

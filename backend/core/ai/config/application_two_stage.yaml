@@ -1,0 +1,67 @@
+# Two-Stage Application Classification Configuration
+#
+# Defines when to run Stage 2 (expensive, accurate model) for application emails
+#
+# Strategy:
+# - Stage 1: gpt-5-mini (fast, all emails)
+# - Stage 2: gpt-5.1 (detailed, only promising applications)
+#
+# Format (Simple):
+#   category_name: threshold
+#   Uses recommendation_score >= threshold
+#
+# Format (Advanced - Score Expressions):
+#   category_name:
+#     recommendation_score: 5  # recommendation >= 5
+#     scientific_excellence_score: 5  # OR scientific_excellence >= 5
+#     operator: "or"  # or "and"
+#
+# Simple format is equivalent to: recommendation_score >= threshold with operator="or"
+
+# Models (provider auto-detected from llm_endpoints.yaml based on model name)
+fast_model: "gpt-5-mini"      # Stage 1: Fast classification -> azure_west_europe
+detailed_model: "gpt-5.1"     # Stage 2: Detailed scoring -> azure_sweden
+
+# Thresholds - Using advanced format with AND logic
+stage_2_criteria:
+  application-phd:
+    recommendation_score: 6
+    scientific_excellence_score: 7
+    operator: "and"  # Run if BOTH conditions met (rec>=6 AND sci>=7)
+  
+  application-postdoc:
+    recommendation_score: 6
+    scientific_excellence_score: 7
+    operator: "and"
+  
+  application-bsc-msc-thesis:
+    recommendation_score: 6
+    scientific_excellence_score: 6
+    operator: "and"  # Run if both score >= 6
+  
+  # Optional: Add these if you want Stage 2 for visiting/intern
+  application-visiting:
+    recommendation_score: 6
+    scientific_excellence_score: 8
+    operator: "and"
+  
+  application-intern: 7  # Simple format also works
+
+# Score combination strategy
+combine_strategy: "max"  # Options: "max" (take highest), "avg" (average), "stage2" (use only Stage 2)
+
+# Notes:
+# - Lower thresholds = more Stage 2 calls = higher cost, better accuracy
+# - Higher thresholds = fewer Stage 2 calls = lower cost, risk missing talent
+# - Recommended: Keep as-is (phd/postdoc >= 5, thesis >= 6)
+#
+# Expected Stage 2 rate (based on 200-email profiling):
+# - ~12% of all emails are applications (24/200)
+# - ~50% of applications meet thresholds (12/24)
+# - ~6% of total emails trigger Stage 2 (12/200)
+#
+# Monthly cost (300 emails/day):
+# - Stage 1: All 300 emails with gpt-5-mini = $6.60/month
+# - Stage 2: 18 emails/day with gpt-5 = $1.35/month
+# - Total: $7.95/month
+

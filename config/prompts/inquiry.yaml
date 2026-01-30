@@ -1,0 +1,118 @@
+# Inquiry Handling Prompts
+# Used for classifying and responding to position inquiries
+
+# Classification prompt for determining if an email is a valid inquiry
+classification:
+  system_prompt: |
+    You are classifying an email that has inquiry-related tags in the subject line.
+    Your job is to:
+    1. Verify this is a valid inquiry about academic positions from an applicant themselves
+    2. Determine what type(s) of position they are asking about
+    3. Extract the sender's full name
+
+    Respond ONLY with valid JSON.
+
+  user_template: |
+    Analyze this email and determine if it is a VALID INQUIRY.
+
+    A VALID INQUIRY must meet ALL of these criteria:
+    - The sender is inquiring about opportunities FOR THEMSELVES (not on behalf of someone else)
+    - The sender is asking about one of the position types listed below
+    - The email is asking for information, not submitting a formal application
+
+    Set is_valid_inquiry=FALSE if ANY of these apply:
+    - A colleague, professor, or third party is asking about opportunities for someone else
+    - The email is spam or irrelevant
+    - The email is a complaint or follow-up about a previous application
+    - The email is a COMPLETE formal application with CV AND cover letter AND transcripts
+    - The sender is asking about something unrelated (courses, collaborations, data requests)
+    - The inquiry type does not match any of the position types below
+
+    Position types (use ONLY these exact values):
+    - internship: Summer/short-term research internship (2-3 months)
+    - thesis: Bachelor's or Master's thesis project
+    - direct_doctorate: Direct doctorate program
+    - phd: Doctoral/PhD position (typically requires M.Sc.)
+    - postdoc: Postdoctoral research position (requires PhD)
+    - visit: Visiting researcher or visiting PhD student
+
+    Disambiguation:
+    - "research project" 3-6 months for university credit → thesis
+    - "research project" 3-6 months for work experience → internship
+    - PhD student from elsewhere wanting to visit → visit (not phd)
+
+    Subject line tags to look for:
+    - #phd → phd
+    - #postdoc → postdoc
+    - #intern or #internship → internship
+    - #thesis → thesis
+    - #visit or #visiting → visit
+    - #direct-doctorate → direct_doctorate
+
+    Extract:
+    - The sender's full name (from body introduction, signature, or From header)
+    - Which position type(s) they are asking about
+
+    Email subject: {subject}
+    From header display name: {from_display_name}
+    Email body:
+    {body}
+
+# Response templates for different inquiry types
+response_templates:
+  internship: |
+    Dear {sender_name},
+
+    Thank you for your interest in an internship position at {lab_name}.
+
+    We do accept interns for summer research projects (typically 2-3 months).
+    Please visit our website for current opportunities: {lab_website}
+
+    {signature}
+
+  thesis: |
+    Dear {sender_name},
+
+    Thank you for your interest in a thesis project at {lab_name}.
+
+    We supervise Bachelor's and Master's thesis projects in collaboration with {institution}.
+    Please visit our website for current research topics: {lab_website}
+
+    {signature}
+
+  phd: |
+    Dear {sender_name},
+
+    Thank you for your interest in a PhD position at {lab_name}.
+
+    For PhD applications, please submit your materials to: {application_email}
+
+    {signature}
+
+  postdoc: |
+    Dear {sender_name},
+
+    Thank you for your interest in a postdoctoral position at {lab_name}.
+
+    For postdoc applications, please submit your materials to: {application_email}
+
+    {signature}
+
+  visit: |
+    Dear {sender_name},
+
+    Thank you for your interest in visiting {lab_name}.
+
+    We do host visiting researchers. Please send your CV and a brief description of your
+    research interests to: {application_email}
+
+    {signature}
+
+  default: |
+    Dear {sender_name},
+
+    Thank you for your interest in {lab_name}.
+
+    Please visit our website for more information: {lab_website}
+
+    {signature}

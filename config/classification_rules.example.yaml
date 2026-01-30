@@ -1,0 +1,233 @@
+# Email Classification Rules
+# =============================================================================
+# Rules are evaluated in priority order (lower number = higher priority)
+# All conditions in a rule must match (AND operation)
+#
+# =============================================================================
+# ACTION TYPES
+# =============================================================================
+#
+# move:     Move email to specified folder
+#           Example: action: { type: move, folder: "MD/Receipts" }
+#
+# keep:     Mark email as important - behavior depends on SOURCE FOLDER:
+#
+#           +-------------------------+---------------------------------------+
+#           |  SOURCE FOLDER          |  "keep" BEHAVIOR                      |
+#           +-------------------------+---------------------------------------+
+#           |  INBOX                  |  Leave in place (don't move)          |
+#           |  Junk / Spam folders    |  RESCUE: Move to INBOX                |
+#           |  Other folders          |  Leave in place (don't move)          |
+#           +-------------------------+---------------------------------------+
+#
+#           WHY THIS DESIGN:
+#           When you mark something as "keep" (e.g., Swiss boarding pass,
+#           tax lawyer emails), you're saying "this is important, I want to
+#           see it." The intent is the same whether the email is currently
+#           in INBOX or wrongly classified as Junk.
+#
+#           This allows ONE rule to work for both scenarios:
+#           - Processing INBOX: important emails stay in inbox
+#           - Processing Junk:  important emails are rescued to inbox
+#
+#           Example: action: { type: keep }
+#
+# label:    Add labels/tags to email
+#           Example: action: { type: label, labels: ["urgent", "for-admin"] }
+#
+# color:    Apply Apple Mail color flag
+#           Example: action: { type: color, color: red }
+#
+# archive:  Move to Archive folder
+#           Example: action: { type: archive }
+#
+# =============================================================================
+# CROSS-ACCOUNT ROUTING
+# =============================================================================
+#
+# Use target_account in action to route emails to a specific account's folder.
+# Example: Personal emails from work account -> personal account's MD/Personal
+#   action:
+#     type: move
+#     folder: "MD/Personal"
+#     target_account: personal  # Routes to personal account regardless of source
+
+rules:
+  # =============================================================================
+  # SYSTEM ALERTS (Priority 1) - Never move these!
+  # =============================================================================
+
+  # Security alerts from Mail-Done API - MUST stay in inbox
+  - name: "System Alert - Mail-Done Security"
+    priority: 1
+    category: notification-system
+    conditions:
+      - field: subject
+        pattern: "\\[SECURITY-ALERT\\]"
+        match_type: matches
+        case_sensitive: false
+    action:
+      type: keep  # CRITICAL: Never move security alerts!
+    stop_on_match: true
+
+  # System monitoring alerts (customize for your setup)
+  - name: "System Alert - NOC/Monitoring"
+    priority: 1
+    category: notification-system
+    conditions:
+      - field: from
+        pattern: "alert@monitoring\\.example\\.com"
+        match_type: matches
+    action:
+      type: keep
+    stop_on_match: true
+
+  # =============================================================================
+  # VIP RULES - See config/vip_senders.yaml for VIP configuration
+  # VIP rules are handled by VIP manager (priority 2-3)
+  # =============================================================================
+
+  # =============================================================================
+  # APPLICATION RULES (Priority 4-10)
+  # =============================================================================
+
+  # Example: Applications from specific source
+  - name: "PhD Application - External Portal"
+    priority: 4
+    category: application-phd
+    application_source: portal
+    conditions:
+      - field: subject
+        pattern: "PhD Application:"
+        match_type: contains
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Applications/PhD"
+      target_account: work
+    stop_on_match: true
+
+  # Example: Postdoc applications
+  - name: "Postdoc Application"
+    priority: 5
+    category: application-postdoc
+    conditions:
+      - field: subject
+        pattern: "(postdoc|post-doc|postdoctoral).*(application|position)"
+        match_type: matches
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Applications/Postdoc"
+      target_account: work
+
+  # =============================================================================
+  # WORK RULES (Priority 20-50)
+  # =============================================================================
+
+  # Example: Emails from your organization's domain
+  - name: "Internal Organization Email"
+    priority: 20
+    category: work-colleague
+    conditions:
+      - field: from
+        pattern: "@yourcompany\\.com$"
+        match_type: matches
+    action:
+      type: keep
+    stop_on_match: false  # Allow further classification
+
+  # =============================================================================
+  # NEWSLETTER/MAILING LIST RULES (Priority 100-199)
+  # =============================================================================
+
+  - name: "Scientific Mailing List"
+    priority: 100
+    category: newsletter-scientific
+    conditions:
+      - field: from
+        pattern: "(arxiv|biorxiv|nature|science)"
+        match_type: contains
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Newsletters"
+
+  # =============================================================================
+  # RECEIPT RULES (Priority 200-299)
+  # =============================================================================
+
+  - name: "Amazon Order Confirmation"
+    priority: 200
+    category: receipt-online
+    conditions:
+      - field: from
+        pattern: "auto-confirm@amazon\\."
+        match_type: matches
+      - field: subject
+        pattern: "(order|shipment|delivery)"
+        match_type: contains
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Receipts"
+
+  # =============================================================================
+  # NOTIFICATION RULES (Priority 300-399)
+  # =============================================================================
+
+  - name: "Calendar Notifications"
+    priority: 300
+    category: notification-calendar
+    conditions:
+      - field: from
+        pattern: "(calendar-notification|noreply.*calendar)"
+        match_type: matches
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Notifications"
+
+  - name: "Social Media Notifications"
+    priority: 310
+    category: notification-social
+    conditions:
+      - field: from
+        pattern: "(linkedin|twitter|facebook|instagram)"
+        match_type: contains
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Notifications"
+
+  # =============================================================================
+  # SPAM/MARKETING RULES (Priority 400+)
+  # =============================================================================
+
+  - name: "Marketing Email"
+    priority: 400
+    category: marketing
+    conditions:
+      - field: subject
+        pattern: "(unsubscribe|sale|offer|discount|promo)"
+        match_type: contains
+        case_sensitive: false
+    action:
+      type: move
+      folder: "MD/Marketing"
+
+# =============================================================================
+# RULE CONFIGURATION
+# =============================================================================
+config:
+  # Default action if no rules match
+  default_action:
+    type: keep  # Let AI classification handle it
+
+  # Whether to apply all matching rules or stop at first match
+  # (per-rule stop_on_match overrides this)
+  apply_all_rules: false
+
+  # Logging level for rule matching
+  log_matches: true
+  log_no_matches: false

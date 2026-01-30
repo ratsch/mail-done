@@ -1,0 +1,3 @@
+# Ignore local configuration overrides
+model_routing.local.yaml
+*.local.yaml

@@ -1,0 +1,135 @@
+# Multi-Account Email System Configuration
+#
+# This file defines multiple email account configurations.
+# Credentials are stored in environment variables (.env), not here!
+#
+# Environment variable pattern:
+#   IMAP_USERNAME_<ACCOUNT>  (e.g., IMAP_USERNAME_WORK)
+#   IMAP_PASSWORD_<ACCOUNT>
+#   SMTP_USERNAME_<ACCOUNT>
+#   SMTP_PASSWORD_<ACCOUNT>
+
+accounts:
+  # Primary work account (example)
+  work:
+    display_name: "Work Email"
+    imap:
+      host: mail.example.com
+      port: 993
+      use_ssl: true
+      # Credentials from: IMAP_USERNAME_WORK, IMAP_PASSWORD_WORK
+    smtp:
+      host: mail.example.com
+      port: 587
+      use_tls: true
+      # Credentials from: SMTP_USERNAME_WORK, SMTP_PASSWORD_WORK
+
+    # Cross-account permissions: which accounts can receive emails from this one
+    allow_moves_to:
+      - personal
+      - archive
+
+    # Default folders (optional, for reference)
+    folders:
+      inbox: INBOX
+      sent: Sent
+      archive: Archive
+      trash: Trash
+
+  # Personal account (example)
+  personal:
+    display_name: "Personal Email"
+    imap:
+      host: imap.personal-domain.com
+      port: 993
+      use_ssl: true
+      # Credentials from: IMAP_USERNAME_PERSONAL, IMAP_PASSWORD_PERSONAL
+    smtp:
+      host: smtp.personal-domain.com
+      port: 465
+      use_tls: false  # Port 465 uses SSL directly, not STARTTLS
+      # Credentials from: SMTP_USERNAME_PERSONAL, SMTP_PASSWORD_PERSONAL
+
+    allow_moves_to:
+      - work
+      - archive
+
+    folders:
+      inbox: INBOX
+      sent: Sent
+      archive: Archive
+      trash: Trash
+
+  # Gmail / Google Workspace account (example)
+  gmail:
+    display_name: "Gmail Account"
+    imap:
+      host: imap.gmail.com
+      port: 993
+      use_ssl: true
+      # Credentials from: IMAP_USERNAME_GMAIL, IMAP_PASSWORD_GMAIL
+      # Use App Password if 2FA is enabled on Google account
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      use_tls: true
+
+    allow_moves_to:
+      - work
+      - personal
+
+    folders:
+      inbox: INBOX
+      sent: "[Gmail]/Sent Mail"
+      archive: "[Gmail]/All Mail"
+      trash: "[Gmail]/Trash"
+
+  # Microsoft 365 / Outlook account (OAuth2 example)
+  office365:
+    display_name: "Microsoft 365"
+    auth_type: oauth2
+    imap:
+      host: outlook.office365.com
+      port: 993
+      use_ssl: true
+    smtp:
+      host: smtp.office365.com
+      port: 587
+      use_tls: true
+    oauth2:
+      tenant_id: organizations
+      client_id: your-azure-app-client-id
+      # Credentials from environment variables:
+      #   IMAP_USERNAME_OFFICE365=user@organization.com
+      #   OAUTH2_REFRESH_TOKEN_OFFICE365=<from setup script>
+
+    allow_moves_to:
+      - work
+      - personal
+
+    folders:
+      inbox: INBOX
+      sent: Sent Items
+      archive: Archive
+      trash: Deleted Items
+
+# Global settings
+settings:
+  # Default account if --account not specified in CLI
+  default_account: work
+
+  # Safety settings for cross-account moves
+  require_cross_account_flag: true  # Must use --allow-cross-account-moves
+  cross_account_dry_run_default: true  # Default to dry-run for cross-account
+
+  # Retry settings
+  max_retries: 3  # Maximum retry attempts for failed moves
+  retry_base_delay: 2.0  # Base delay in seconds for exponential backoff
+
+  # Orphan cleanup
+  orphan_cleanup_schedule: "0 2 * * *"  # Cron format: 2 AM daily
+  orphan_cleanup_retention_days: 7  # Check moves from last N days
+
+  # Logging
+  log_cross_account_moves: true
+  cross_account_log_file: logs/cross_account_moves.log

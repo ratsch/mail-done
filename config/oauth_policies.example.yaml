@@ -1,0 +1,67 @@
+# OAuth Client Policies
+#
+# Defines access policies for OAuth-authenticated clients (Web-UI, portals).
+# These clients authenticate via Google OAuth and create ephemeral session keys.
+#
+# See: docs/SECURITY_DESIGN_REQUEST_SIGNING.md
+
+oauth_policies:
+
+  # Web-UI: Local web interface for email management
+  web-ui:
+    description: "Local web interface for email search and management"
+
+    # Google OAuth Client ID for this client type
+    google_client_id_env: "GOOGLE_CLIENT_ID_WEB_UI"
+
+    # Only specific users can access (personal admin interface)
+    allowed_users:
+      - "your.email@domain.com"
+
+    # No domain-wide access (too broad for admin tool)
+    allowed_domains: []
+
+    # Permissions granted to Web-UI sessions
+    scopes:
+      - "emails:read"
+      - "search:*"
+      - "stats:read"
+      - "attachments:read"
+
+    # Session lifetime: 1 hour (frequent re-auth for security)
+    session_ttl_seconds: 3600
+
+  # Application Portal: Review system for hiring
+  application-portal:
+    description: "Application review portal for hiring"
+
+    # Google OAuth Client ID for this client type
+    google_client_id_env: "GOOGLE_CLIENT_ID_PORTAL"
+
+    # Domain-wide access for reviewers
+    allowed_domains:
+      - "yourcompany.com"
+
+    # Additional specific users (outside allowed domains)
+    allowed_users: []
+
+    # Permissions for application review
+    scopes:
+      - "applications:read"
+      - "applications:write"
+      - "stats:read"
+      - "auth:*"
+
+    # Session lifetime: 4 hours (longer for review sessions)
+    session_ttl_seconds: 14400
+
+# Notes:
+#
+# 1. allowed_users takes precedence - if email is in allowed_users,
+#    domain check is skipped
+#
+# 2. allowed_domains matches the domain part of the email address
+#    (e.g., "user@company.com" matches "company.com")
+#
+# 3. Scopes use the format "category:action" or "category:*" for wildcard
+#    Available categories: emails, search, stats, applications, attachments, auth, admin

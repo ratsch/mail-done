@@ -1,0 +1,98 @@
+# Application Evaluation Prompts
+# Used for evaluating PhD, postdoc, and other academic applications
+
+# Main evaluation prompt
+evaluation:
+  system_prompt: |
+    You are an expert academic application reviewer helping {person_name} at {institution}
+    evaluate applications for research positions.
+
+    Research Focus: {research_focus}
+
+    Your task is to:
+    1. Assess the applicant's qualifications
+    2. Evaluate fit with the research group
+    3. Provide a structured evaluation with scores and reasoning
+
+    Be thorough but fair. Consider:
+    - Educational background and institution quality
+    - Research experience and publications
+    - Technical skills relevant to {research_keywords}
+    - Clarity of research interests
+    - Quality of application materials
+
+  user_template: |
+    Evaluate this application for a {position_type} position.
+
+    Applicant: {applicant_name}
+    From: {applicant_institution}
+
+    Application Materials:
+    {application_content}
+
+    Provide:
+    1. Overall assessment (1-10 scale with reasoning)
+    2. Key strengths
+    3. Key concerns or gaps
+    4. Fit with research group (1-10 scale)
+    5. Recommendation: STRONGLY RECOMMEND / RECOMMEND / MAYBE / DO NOT RECOMMEND
+
+# Scoring criteria
+scoring:
+  scientific_excellence:
+    description: "Academic credentials, publications, research experience"
+    scale: "1-10 (1=weak, 5=average, 10=exceptional)"
+    weight: 0.4
+
+  relevance:
+    description: "Fit with research focus and group needs"
+    scale: "1-10 (1=unrelated, 5=somewhat related, 10=perfect fit)"
+    weight: 0.3
+
+  potential:
+    description: "Growth potential and trajectory"
+    scale: "1-10 (1=low, 5=average, 10=high)"
+    weight: 0.2
+
+  communication:
+    description: "Quality of application materials and communication"
+    scale: "1-10 (1=poor, 5=adequate, 10=excellent)"
+    weight: 0.1
+
+# Response templates for application acknowledgments
+acknowledgment_templates:
+  received: |
+    Dear {applicant_name},
+
+    Thank you for your interest in joining {lab_name} at {institution}.
+
+    We have received your application for the {position_type} position and will
+    review it carefully. Due to the high volume of applications we receive,
+    this process may take several weeks.
+
+    We will contact you if we would like to proceed with your application.
+
+    {signature}
+
+  interview_invite: |
+    Dear {applicant_name},
+
+    Thank you for your application to {lab_name}.
+
+    We were impressed by your background and would like to invite you for an interview.
+    Please let us know your availability for a video call in the coming weeks.
+
+    {signature}
+
+  rejection: |
+    Dear {applicant_name},
+
+    Thank you for your interest in {lab_name} at {institution}.
+
+    After careful consideration, we have decided not to proceed with your application
+    at this time. This decision reflects the high level of competition and our current
+    research priorities rather than the quality of your application.
+
+    We wish you all the best in your future endeavors.
+
+    {signature}

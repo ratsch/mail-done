@@ -1,0 +1,74 @@
+# Profile Tags Configuration for Application Evaluation
+# Each tag should have a unique key, display name, and description
+# Tags are used to categorize PhD/Postdoc applicants based on their expertise
+#
+# Customize these tags based on your research areas and hiring needs.
+
+profile_tags:
+  machine_learning:
+    name: "Machine Learning"
+    description: "Experience with neural networks, deep learning, or statistical ML"
+    category: "ml_methods"
+
+  data_analysis:
+    name: "Data Analysis"
+    description: "Strong skills in data processing, visualization, and statistical analysis"
+    category: "technical"
+
+  software_engineering:
+    name: "Software Engineering"
+    description: "Strong programming skills, software design, and engineering practices"
+    category: "technical"
+
+  domain_expertise:
+    name: "Domain Expertise"
+    description: "Deep knowledge in relevant application domain"
+    category: "domain"
+
+  nlp:
+    name: "Natural Language Processing"
+    description: "Experience with NLP, text mining, or language models"
+    category: "ml_methods"
+
+  computer_vision:
+    name: "Computer Vision"
+    description: "Experience with image processing, object detection, or visual AI"
+    category: "ml_methods"
+
+  time_series:
+    name: "Time Series Analysis"
+    description: "Analysis of temporal data, forecasting, or dynamic systems"
+    category: "ml_methods"
+
+  bayesian_methods:
+    name: "Bayesian Methods"
+    description: "Probabilistic modeling, Bayesian inference, or uncertainty quantification"
+    category: "ml_methods"
+
+  research_experience:
+    name: "Research Experience"
+    description: "Publications, conference presentations, or research internships"
+    category: "academic"
+
+  industry_experience:
+    name: "Industry Experience"
+    description: "Relevant work experience in industry or startups"
+    category: "professional"
+
+# Categories for grouping tags
+categories:
+  ml_methods:
+    name: "Machine Learning Methods"
+    color: "#FF9800"
+  technical:
+    name: "Technical Skills"
+    color: "#2196F3"
+  domain:
+    name: "Domain Knowledge"
+    color: "#4CAF50"
+  academic:
+    name: "Academic Background"
+    color: "#9C27B0"
+  professional:
+    name: "Professional Experience"
+    color: "#607D8B"

@@ -1,0 +1,111 @@
+# Email Preprocessing Rules
+# These run BEFORE classification to normalize email headers
+# Use case: Auto-forwarded emails, mailing lists, etc.
+
+preprocessing_rules:
+  # Rule 1: Auto-forwarded emails with body parsing
+  # Customize match_from and match_to for your forwarding setup
+  - name: "Auto-forwarded from Primary Account"
+    description: >
+      Emails forwarded from your primary account. When manually forwarded
+      via Apple Mail, the original sender is in the body.
+      Parse the "Begin forwarded message:" block to extract real sender.
+    priority: 1
+
+    # Customize these patterns for your email addresses
+    match_from: "your\\.email@domain\\.com"
+    match_to: "your\\.email\\.auto@domain\\.com"
+    match_subject: "^Fwd:"  # Apple Mail adds this
+
+    # Parse body to extract original sender (Apple Mail format)
+    parse_forwarded_body: true
+
+    # Also remove the Fwd: prefix from subject
+    remove_prefix: "^Fwd:\\s*"
+
+  # Rule 2: Handle Resent-* headers (standard email forwarding)
+  - name: "Standard Email Forwarding (Resent Headers)"
+    description: >
+      Some email clients use Resent-From, Resent-To headers for forwarding.
+      This is RFC-compliant forwarding.
+    priority: 2
+
+    # Only apply if Resent-From header exists
+    match_from: ".*"  # Apply to all
+
+    extract_original_from: "Resent-From"
+    extract_original_to: "Resent-To"
+
+  # Rule 3: Mailing list emails
+  - name: "Mailing List Unwrap"
+    description: >
+      Emails from mailing lists often have List-* headers.
+      Extract original sender from List-Post or Reply-To.
+    priority: 10
+
+    # Match emails with List-Id header (checked via subject pattern as proxy)
+    match_subject: "\\[.*\\]"  # Common mailing list format: [list-name] Subject
+
+    # Use Reply-To as original sender for mailing lists
+    header_mappings:
+      from: "Reply-To"
+
+  # Rule 4: Remove forwarding prefixes from subject
+  - name: "Clean Forwarded Subject"
+    description: "Remove Fwd:, Fw:, FWD: prefixes from subject for classification"
+    priority: 20
+
+    match_subject: "^(Fwd?|FWD?):\\s*"
+
+    remove_prefix: "^(Fwd?|FWD?):\\s*"
+
+  # Rule 5: Remove reply prefixes (if you want original subject for classification)
+  - name: "Clean Reply Subject"
+    description: "Remove Re:, RE: prefixes to get original subject"
+    priority: 21
+
+    match_subject: "^(Re|RE):\\s*"
+
+    remove_prefix: "^(Re|RE):\\s*"
+
+# Configuration
+config:
+  # Should we log preprocessing transformations?
+  log_transformations: true
+
+  # Apply all matching rules or stop at first?
+  apply_all_rules: true  # Usually want all preprocessing
+
+  # Common header names for forwarded emails
+  # (different email systems use different headers)
+  forwarded_email_headers:
+    - "X-Forwarded-For"
+    - "X-Original-Sender"
+    - "X-Original-To"
+    - "X-Original-Subject"
+    - "Resent-From"
+    - "Resent-To"
+    - "Resent-Subject"
+    - "Original-From"
+    - "Original-To"
+
+  # Mailing list headers
+  mailing_list_headers:
+    - "List-Id"
+    - "List-Post"
+    - "List-Unsubscribe"
+    - "Mailing-List"
+
+# Notes on header extraction:
+#
+# You may need to check what headers your email forwarding actually uses.
+# To discover this, look at a forwarded email's raw source:
+#
+# In Mail.app: View > Message > Raw Source
+#
+# Look for headers like:
+# X-Forwarded-For: original@sender.com
+# X-Original-Sender: original@sender.com
+# Resent-From: original@sender.com
+#
+# Then update the header names in the rules above.

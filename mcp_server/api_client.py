@@ -1,0 +1,1020 @@
+"""
+API Client for Email Search Backend
+
+Provides HTTP client to call the FastAPI backend instead of direct DB access.
+
+Supports two authentication methods (auto-detected):
+1. Ed25519 request signing (if SIGNING_KEY_PATH is set)
+2. API key (fallback, if BACKEND_API_KEY is set)
+"""
+import base64
+import hashlib
+import json as json_module
+import os
+import re
+import logging
+import secrets
+import time
+import httpx
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from urllib.parse import urljoin, urlencode
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+# Configuration from environment
+API_BASE_URL = os.getenv("EMAIL_API_URL", "http://localhost:8000")
+# Note: API_KEY is loaded lazily in __init__ to allow server creation without it
+# This enables testing the server creation without backend running
+
+# SSL verification - set to "true" to skip SSL verification for self-signed certs
+MCP_SKIP_SSL_VERIFY = os.getenv("MCP_SKIP_SSL_VERIFY", "false").lower() == "true"
+
+# MCP Query Restrictions (for security and scope)
+# NOTE: These are READ FRESH when EmailAPIClient is instantiated, not at module import time
+# This ensures environment variables set by Cursor MCP are picked up correctly
+def _get_mcp_allowed_account():
+    return os.getenv("MCP_ALLOWED_ACCOUNT")  # e.g., "work"
+
+def _get_mcp_date_limit_days():
+    return int(os.getenv("MCP_DATE_LIMIT_DAYS", "730"))  # HARD LIMIT: 730 days (2 years)
+
+def _get_mcp_default_days():
+    return int(os.getenv("MCP_DEFAULT_DAYS", "90"))  # Default: 90 days (3 months)
+
+
+class EmailAPIClient:
+    """
+    HTTP client for the Email Search Backend API.
+    
+    Wraps all API calls to the FastAPI backend service.
+    """
+    
+    def __init__(
+        self,
+        base_url: str = None,
+        api_key: str = None,
+        signing_key_path: str = None,
+        client_id: str = "laptop-admin",
+        timeout: float = 60.0
+    ):
+        """
+        Initialize API client.
+        
+        Authentication priority:
+        1. If signing_key_path is provided (or SIGNING_KEY_PATH env var), use Ed25519 signing
+        2. Otherwise, fall back to api_key (or BACKEND_API_KEY env var)
+        
+        Args:
+            base_url: Backend API URL (default: from EMAIL_API_URL env var)
+            api_key: API key for authentication (default: from BACKEND_API_KEY env var)
+            signing_key_path: Path to Ed25519 private key for signing
+            client_id: Client identifier for signed requests (default: laptop-admin)
+            timeout: Request timeout in seconds
+        """
+        self.base_url = (base_url or API_BASE_URL).rstrip('/')
+        self.timeout = timeout
+        self.client_id = client_id
+        
+        # Try to set up signing first
+        self._private_key = None
+        self._use_signing = False
+        
+        signing_path = signing_key_path or os.getenv("SIGNING_KEY_PATH")
+        if signing_path:
+            try:
+                self._setup_signing(signing_path)
+                self._use_signing = True
+                logger.info(f"EmailAPIClient: using Ed25519 signing (client_id={client_id})")
+            except Exception as e:
+                logger.warning(f"Failed to load signing key, falling back to API key: {e}")
+        
+        # Fall back to API key if signing not available
+        if not self._use_signing:
+            self.api_key = api_key or os.getenv("BACKEND_API_KEY")
+            if not self.api_key:
+                raise ValueError(
+                    "Either SIGNING_KEY_PATH or BACKEND_API_KEY environment variable is required."
+                )
+            self.headers = {
+                "X-API-Key": self.api_key,
+                "Content-Type": "application/json"
+            }
+            logger.info("EmailAPIClient: using API key authentication")
+        else:
+            self.api_key = None
+            self.headers = {"Content-Type": "application/json"}
+        
+        # MCP Query Restrictions - read fresh from environment each time
+        self.allowed_account = _get_mcp_allowed_account()
+        self.date_limit_days = _get_mcp_date_limit_days()  # HARD LIMIT (can never be exceeded)
+        self.default_days = _get_mcp_default_days()  # Default lookback when user doesn't specify
+        
+        # Calculate date cutoffs
+        # - max_date_cutoff: HARD LIMIT - no queries before this date (730 days)
+        # - default_date_cutoff: Default lookback when user doesn't specify (90 days)
+        self.max_date_cutoff = (datetime.now(timezone.utc) - timedelta(days=self.date_limit_days)).isoformat()
+        self.default_date_cutoff = (datetime.now(timezone.utc) - timedelta(days=self.default_days)).isoformat()
+        
+        logger.info(f"EmailAPIClient initialized: {self.base_url}")
+        if self.allowed_account:
+            logger.info(f"MCP restricted to account: {self.allowed_account}")
+        logger.info(f"MCP HARD LIMIT: emails from {self.max_date_cutoff[:10]} onwards ({self.date_limit_days} days)")
+        logger.info(f"MCP DEFAULT: emails from {self.default_date_cutoff[:10]} onwards ({self.default_days} days)")
+    
+    def _setup_signing(self, key_path: str) -> None:
+        """Load Ed25519 private key for request signing."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        
+        path = Path(key_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"Signing key not found: {path}")
+        
+        pem_data = path.read_bytes()
+        private_key = serialization.load_pem_private_key(pem_data, password=None)
+        
+        if not isinstance(private_key, Ed25519PrivateKey):
+            raise ValueError(f"Not an Ed25519 key: {type(private_key)}")
+        
+        self._private_key = private_key
+    
+    def _sign_request(self, method: str, path: str, body: bytes = b"") -> Dict[str, str]:
+        """Sign a request and return auth headers."""
+        timestamp = int(time.time())
+        nonce = secrets.token_hex(16)  # 32 hex characters
+        
+        # Compute body hash
+        body_hash = "empty" if not body else hashlib.sha256(body).hexdigest()
+        
+        # Create canonical request
+        canonical = f"{method.upper()}\n{path}\n{timestamp}\n{nonce}\n{body_hash}"
+        
+        # Sign with Ed25519
+        signature = self._private_key.sign(canonical.encode("utf-8"))
+        signature_b64 = base64.b64encode(signature).decode("ascii")
+        
+        return {
+            "X-Client-Id": self.client_id,
+            "X-Timestamp": str(timestamp),
+            "X-Nonce": nonce,
+            "X-Signature": signature_b64,
+        }
+    
+    def _apply_mcp_restrictions(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply MCP query restrictions to search parameters.
+        
+        Enforces:
+        - Date restriction (HARD LIMIT: max 730 days, DEFAULT: 90 days)
+        - Account restriction (only emails in allowed account)
+        
+        Args:
+            params: Original search parameters
+            
+        Returns:
+            Modified parameters with restrictions applied
+        """
+        # Apply date restriction
+        if 'date_from' not in params or not params['date_from']:
+            # No date specified - use DEFAULT (90 days)
+            params['date_from'] = self.default_date_cutoff
+            logger.debug(f"No date specified, using DEFAULT: {self.default_date_cutoff[:10]} ({self.default_days} days)")
+        else:
+            # User specified a date - enforce HARD LIMIT (730 days max)
+            user_date = params['date_from']
+            if user_date < self.max_date_cutoff:
+                logger.warning(f"HARD LIMIT enforced: {user_date[:10]} -> {self.max_date_cutoff[:10]} (max {self.date_limit_days} days)")
+                params['date_from'] = self.max_date_cutoff
+            else:
+                logger.debug(f"User date accepted: {user_date[:10]} (within HARD LIMIT)")
+        
+        # Apply account restriction (if configured)
+        if self.allowed_account:
+            # Check if it's a single account or comma-separated list
+            accounts = [a.strip() for a in self.allowed_account.split(',') if a.strip()]
+            
+            if len(accounts) == 1:
+                # Single account - filter to just that account
+                params['account_filter'] = accounts[0]
+                logger.debug(f"Account restriction applied: {accounts[0]}")
+            else:
+                # Multiple accounts allowed - don't filter, search all allowed accounts
+                # The MCP server will validate results against the allowed list
+                logger.debug(f"Multiple accounts allowed: {accounts}, no account_filter applied")
+        
+        return params
+    
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Dict[str, Any] = None,
+        json_data: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Make HTTP request to backend API."""
+        url = urljoin(self.base_url + "/", endpoint.lstrip('/'))
+        
+        # Build path for signing (includes query string)
+        signing_path = "/" + endpoint.lstrip('/')
+        if params:
+            query = urlencode(params)
+            signing_path = f"{signing_path}?{query}"
+        
+        # Prepare body
+        body = b""
+        if json_data is not None:
+            body = json_module.dumps(json_data).encode("utf-8")
+        
+        # Build headers
+        headers = dict(self.headers)
+        if self._use_signing:
+            sign_headers = self._sign_request(method, signing_path, body)
+            headers.update(sign_headers)
+        
+        async with httpx.AsyncClient(timeout=self.timeout, verify=not MCP_SKIP_SSL_VERIFY) as client:
+            try:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    params=params,
+                    content=body if body else None,
+                )
+                response.raise_for_status()
+                return response.json()
+                
+            except httpx.HTTPStatusError as e:
+                # 404 is expected in some cases (e.g., sender stats for domains)
+                if e.response.status_code == 404:
+                    logger.debug(f"API 404: {endpoint} - {e.response.text}")
+                else:
+                    logger.error(f"API error {e.response.status_code}: {e.response.text}")
+                return {"error": f"API error: {e.response.status_code}", "details": e.response.text}
+            except httpx.RequestError as e:
+                logger.error(f"Request error: {e}")
+                return {"error": f"Request failed: {str(e)}"}
+    
+    async def semantic_search(
+        self,
+        query: str,
+        mode: str = "semantic",
+        top_k: int = 10,
+        similarity_threshold: float = 0.6,
+        category: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        vip_only: bool = False,
+        needs_reply: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """
+        Search emails semantically via backend API.
+        
+        NOTE: MCP restrictions automatically applied:
+        - Date filtered to last {MCP_DATE_LIMIT_DAYS} days
+        - Account filtered to {MCP_ALLOWED_ACCOUNT} (if configured)
+        
+        Calls: GET /api/search
+        """
+        params = {
+            "q": query,
+            "mode": mode,
+            "page_size": top_k,
+            "similarity_threshold": similarity_threshold,
+            "date_from": date_from,
+            "date_to": date_to
+        }
+        
+        # Apply MCP restrictions (date and account filters)
+        params = self._apply_mcp_restrictions(params)
+        
+        if category:
+            params["category"] = category
+        if vip_only:
+            params["vip_only"] = "true"
+        if needs_reply is not None:
+            params["needs_reply"] = str(needs_reply).lower()
+        
+        result = await self._request("GET", "/api/search", params=params)
+        
+        # Transform to simpler format for MCP
+        if "error" not in result:
+            return {
+                "query": query,
+                "mode": mode,
+                "total": result.get("total", 0),
+                "results": [
+                    self._transform_email_result(r)
+                    for r in result.get("results", [])
+                ],
+                "search_time_ms": None  # API doesn't return this
+            }
+        return result
+    
+    async def search_by_sender(
+        self,
+        sender: str,
+        top_k: int = 20,
+        category: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Search emails by sender via backend API.
+        
+        NOTE: MCP restrictions automatically applied:
+        - Date filtered to last {MCP_DATE_LIMIT_DAYS} days
+        - Account filtered to {MCP_ALLOWED_ACCOUNT} (if configured)
+        
+        Uses the stats endpoint to get sender info, then searches.
+        """
+        # Search with sender filter
+        # Use keyword mode (fast!) with wildcard query since the sender filter does the real work
+        # Backend has max page_size of 100
+        params = {
+            "q": "*",  # Wildcard query - we're filtering by sender, not by keywords
+            "mode": "keyword",  # Keyword mode is MUCH faster (no embedding generation!)
+            "page_size": min(top_k, 100),  # Respect API limit
+            "sender": sender,  # Backend will filter by from_address at DB level (fast!)
+            "date_from": date_from,
+            "date_to": date_to
+        }
+        
+        # Apply MCP restrictions (date and account filters)
+        params = self._apply_mcp_restrictions(params)
+        
+        if category:
+            params["category"] = category
+        
+        result = await self._request("GET", "/api/search", params=params)
+        
+        # Try to get sender stats (may not exist for domain-based searches)
+        sender_info = await self._request("GET", f"/api/stats/senders/{sender}")
+        # Note: 404 is expected when searching by domain rather than specific sender
+        
+        if "error" not in result:
+            return {
+                "query": sender,
+                "mode": "sender",
+                "total": result.get("total", 0),
+                "results": [
+                    self._transform_email_result(r)
+                    for r in result.get("results", [])
+                ],
+                "sender_info": sender_info if "error" not in sender_info else None
+            }
+        return result
+    
+    async def search_by_topic(
+        self,
+        topic: str,
+        categories: Optional[List[str]] = None,
+        top_k: int = 20,
+        similarity_threshold: float = 0.6
+    ) -> Dict[str, Any]:
+        """
+        Search emails by research topic via backend API.
+        
+        Calls: GET /api/search/topics
+        
+        Note: This uses semantic search on topics, so date filtering is applied
+        via MCP restrictions to limit the search scope.
+        """
+        params = {
+            "topic": topic,
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold
+        }
+        
+        # Apply MCP date and account restrictions
+        params = self._apply_mcp_restrictions(params)
+        
+        if categories:
+            params["categories"] = ",".join(categories)
+        
+        result = await self._request("GET", "/api/search/topics", params=params)
+        
+        if "error" not in result:
+            return {
+                "query": topic,
+                "mode": "topic",
+                "categories": categories,
+                "total": result.get("total", 0),
+                "results": [
+                    self._transform_email_result(r)
+                    for r in result.get("results", [])
+                ]
+            }
+        return result
+    
+    async def find_similar_emails(
+        self,
+        email_id: str,
+        top_k: int = 10,
+        same_category_only: bool = False,
+        exclude_same_sender: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Find emails similar to a reference email via backend API.
+        
+        Calls: GET /api/search/similar/{email_id}
+        """
+        params = {
+            "top_k": top_k,
+            "same_category_only": str(same_category_only).lower(),
+            "exclude_same_sender": str(exclude_same_sender).lower()
+        }
+        
+        result = await self._request("GET", f"/api/search/similar/{email_id}", params=params)
+        
+        if "error" not in result:
+            return {
+                "reference_email_id": email_id,
+                "mode": "similar",
+                "total": result.get("total", 0),
+                "results": [
+                    self._transform_email_result(r)
+                    for r in result.get("results", [])
+                ]
+            }
+        return result
+    
+    async def get_email_details(self, email_id: str) -> Dict[str, Any]:
+        """
+        Get full email details via backend API.
+        
+        Calls: GET /api/emails/{email_id}
+        """
+        result = await self._request("GET", f"/api/emails/{email_id}")
+        
+        if "error" not in result:
+            return self._transform_email_detail(result)
+        return result
+    
+    async def list_categories(self) -> Dict[str, Any]:
+        """
+        List email categories via backend API.
+        
+        Calls: GET /api/stats/categories/breakdown
+        """
+        result = await self._request("GET", "/api/stats/categories/breakdown")
+        
+        if "error" not in result and "categories" in result:
+            # Backend returns categories as a dict {category_name: count}
+            cats_dict = result.get("categories", {})
+            categories = [
+                {
+                    "name": cat_name,
+                    "count": count,
+                    "description": self._get_category_description(cat_name)
+                }
+                for cat_name, count in cats_dict.items()
+            ]
+            return {
+                "total_categories": len(categories),
+                "categories": categories
+            }
+        return result
+    
+    async def list_top_senders(self, top_k: int = 20) -> Dict[str, Any]:
+        """
+        List top email senders via backend API.
+        
+        Calls: GET /api/stats/senders
+        """
+        result = await self._request("GET", "/api/stats/senders", params={"limit": top_k})
+        
+        if "error" not in result:
+            return {
+                "total": len(result.get("senders", [])),
+                "senders": result.get("senders", [])
+            }
+        return result
+    
+    def _transform_email_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform API email result to MCP format."""
+        email = result.get("email", result)
+        return {
+            "id": email.get("id"),
+            "message_id": email.get("message_id"),
+            "subject": email.get("subject", "(No subject)"),
+            "from_address": email.get("from_address"),
+            "from_name": email.get("from_name"),
+            "date": email.get("date"),
+            "category": email.get("category") or email.get("ai_category"),
+            "subcategory": email.get("subcategory") or email.get("ai_subcategory"),
+            "summary": email.get("summary") or email.get("ai_summary"),
+            "similarity_score": result.get("score"),
+            "is_vip": bool(email.get("vip_level")),
+            "needs_reply": email.get("needs_reply", False)
+        }
+    
+    def _transform_email_detail(self, email: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transform API email detail to MCP format.
+        
+        SECURITY: Excludes attachment content/paths for safety.
+        """
+        return {
+            "id": email.get("id"),
+            "message_id": email.get("message_id"),
+            "subject": email.get("subject", "(No subject)"),
+            "from_address": email.get("from_address"),
+            "from_name": email.get("from_name"),
+            "date": email.get("date"),
+            "body": email.get("body_text") or email.get("body_markdown") or "",
+            "to_addresses": email.get("to_addresses", []),
+            "cc_addresses": email.get("cc_addresses", []),
+            # SECURITY: Only expose attachment metadata, not content
+            "has_attachments": email.get("has_attachments", False),
+            "attachment_count": email.get("attachment_count", 0),
+            "attachment_names": [
+                att.get("filename", "unknown") 
+                for att in email.get("attachment_info", [])
+            ] if email.get("attachment_info") else [],
+            # No attachment content or paths exposed to MCP
+            "category": email.get("category") or email.get("ai_category"),
+            "subcategory": email.get("subcategory") or email.get("ai_subcategory"),
+            "summary": email.get("summary") or email.get("ai_summary"),
+            "urgency": email.get("ai_urgency"),
+            "urgency_score": email.get("ai_urgency_score"),
+            "action_items": email.get("ai_action_items"),
+            "applicant_name": email.get("applicant_name"),
+            "research_fit_score": email.get("research_fit_score"),
+            "recommendation_score": email.get("overall_recommendation_score"),
+            "is_vip": bool(email.get("vip_level")),
+            "needs_reply": email.get("needs_reply", False)
+        }
+    
+    def _get_category_description(self, category: str) -> str:
+        """Get human-readable description for a category."""
+        descriptions = {
+            "application-phd": "PhD application emails",
+            "application-postdoc": "Postdoc application emails",
+            "application-visiting": "Visiting researcher applications",
+            "application-internship": "Internship applications",
+            "invitation-speaking": "Speaking invitations (conferences, seminars)",
+            "invitation-review": "Paper/grant review requests",
+            "invitation-committee": "Committee participation requests",
+            "collaboration-research": "Research collaboration proposals",
+            "collaboration-industry": "Industry partnership inquiries",
+            "admin-hr": "HR and administrative matters",
+            "admin-finance": "Financial and budget matters",
+            "admin-it": "IT and technical support",
+            "teaching-course": "Course-related emails",
+            "teaching-student": "Student inquiries",
+            "newsletter": "Newsletters and announcements",
+            "spam": "Spam or unwanted emails",
+            "personal": "Personal correspondence",
+            "other": "Uncategorized emails"
+        }
+        return descriptions.get(category, f"Emails in category: {category}")
+    
+    def _sanitize_filename(self, filename: str, max_length: int = 100) -> str:
+        """
+        Sanitize filename for safe filesystem storage.
+        
+        - Replace invalid chars with underscore
+        - Truncate to max_length (preserving extension)
+        - Handle edge cases (empty, dots only, etc.)
+        
+        Args:
+            filename: Original filename
+            max_length: Maximum length (default: 100)
+            
+        Returns:
+            Sanitized filename safe for filesystem
+        """
+        # Replace invalid characters (Windows + Unix)
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename)
+        
+        # Handle edge cases
+        if not sanitized or sanitized.strip('.') == '':
+            sanitized = 'attachment'
+        
+        # Truncate while preserving extension
+        if len(sanitized) > max_length:
+            name, ext = os.path.splitext(sanitized)
+            max_name_len = max_length - len(ext)
+            sanitized = name[:max_name_len] + ext
+        
+        return sanitized
+    
+    def _extract_filename_from_content_disposition(self, content_disposition: str) -> Optional[str]:
+        """
+        Extract filename from Content-Disposition header.
+        
+        Handles:
+        - Simple format: attachment; filename="example.pdf"
+        - RFC 5987 format: attachment; filename*=UTF-8''example%20file.pdf
+        - Mixed format with both filename and filename*
+        
+        Args:
+            content_disposition: Content-Disposition header value
+            
+        Returns:
+            Extracted filename or None if not found
+        """
+        if not content_disposition:
+            return None
+        
+        # Try RFC 5987 filename* first (takes precedence)
+        # Format: filename*=charset'language'encoded_value
+        match = re.search(r"filename\*\s*=\s*([^']*)'([^']*)'(.+?)(?:;|$)", content_disposition)
+        if match:
+            charset, language, encoded_value = match.groups()
+            charset = charset or 'utf-8'
+            try:
+                from urllib.parse import unquote
+                return unquote(encoded_value.strip(), encoding=charset)
+            except Exception:
+                pass
+        
+        # Try regular filename parameter
+        # Format: filename="value" or filename=value
+        match = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition)
+        if match:
+            return match.group(1)
+        
+        # Try without quotes
+        match = re.search(r'filename\s*=\s*([^;\s]+)', content_disposition)
+        if match:
+            return match.group(1)
+        
+        return None
+    
+    async def _apply_cache_ttl(self, cache_dir: Path) -> None:
+        """Delete cached files older than TTL (if configured)"""
+        ttl_days_str = os.getenv("MCP_ATTACHMENT_CACHE_TTL_DAYS")
+        if not ttl_days_str:
+            return
+        
+        try:
+            ttl_days = int(ttl_days_str)
+            cutoff = datetime.now() - timedelta(days=ttl_days)
+            
+            for file in cache_dir.iterdir():
+                if file.is_file():
+                    mtime = datetime.fromtimestamp(file.stat().st_mtime)
+                    if mtime < cutoff:
+                        logger.info(f"TTL cleanup: deleting {file.name} (older than {ttl_days} days)")
+                        file.unlink()
+        except ValueError:
+            logger.warning(f"Invalid MCP_ATTACHMENT_CACHE_TTL_DAYS: {ttl_days_str}")
+        except Exception as e:
+            logger.warning(f"Error during TTL cleanup: {e}")
+    
+    async def list_attachments(self, email_id: str) -> Dict[str, Any]:
+        """
+        List attachments for an email.
+        
+        Args:
+            email_id: UUID of the email
+            
+        Returns:
+            Dict with "attachments" list or "error" key
+        """
+        result = await self._request("GET", f"/api/emails/{email_id}/attachments")
+        
+        # API returns a list, but we need to handle errors
+        if isinstance(result, list):
+            return {"attachments": result}
+        elif isinstance(result, dict) and "error" in result:
+            return result
+        else:
+            # Unexpected format - wrap in dict
+            return {"attachments": result if isinstance(result, list) else []}
+    
+    async def download_attachment(
+        self, 
+        email_id: str, 
+        attachment_index: int
+    ) -> Dict[str, Any]:
+        """
+        Download attachment to cache directory with caching and TTL support.
+        
+        Args:
+            email_id: UUID of the email
+            attachment_index: 0-based index of attachment
+            
+        Returns:
+            {
+                "success": true,
+                "cached_path": "~/Downloads/.mcp_attachments/work/abc123_0_CV.pdf",
+                "original_filename": "CV_John_Doe.pdf",
+                "size_bytes": 1048576,
+                "content_type": "application/pdf",
+                "from_cache": false
+            }
+        """
+        # Get and validate cache directory
+        cache_dir_str = os.getenv("MCP_ATTACHMENT_CACHE_DIR")
+        if not cache_dir_str:
+            return {"error": "MCP_ATTACHMENT_CACHE_DIR not configured"}
+        
+        cache_dir = Path(cache_dir_str).expanduser()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Apply TTL cleanup (if configured) - but only run periodically to avoid overhead
+        # Check if we should run cleanup (every 10 downloads or if cache is large)
+        cache_cleanup_counter = getattr(self, '_cache_cleanup_counter', 0)
+        cache_cleanup_counter += 1
+        
+        # Run cleanup every 10 downloads or if cache dir has > 100 files
+        should_cleanup = False
+        if cache_cleanup_counter >= 10:
+            should_cleanup = True
+            self._cache_cleanup_counter = 0
+        elif cache_dir.exists():
+            file_count = sum(1 for _ in cache_dir.iterdir() if _.is_file())
+            if file_count > 100:
+                should_cleanup = True
+        
+        if should_cleanup:
+            await self._apply_cache_ttl(cache_dir)
+        else:
+            self._cache_cleanup_counter = cache_cleanup_counter
+        
+        # Get attachment metadata first
+        attachments_result = await self.list_attachments(email_id)
+        if "error" in attachments_result:
+            return attachments_result
+        
+        # Extract list from result dict
+        attachments_list = attachments_result.get("attachments", [])
+        if attachment_index >= len(attachments_list):
+            return {
+                "error": f"Attachment index {attachment_index} out of range (max: {len(attachments_list)-1})"
+            }
+        
+        attachment_meta = attachments_list[attachment_index]
+        original_filename = attachment_meta['filename']
+        expected_size = attachment_meta.get('size', 0)
+        
+        # Generate cache filename with sanitization
+        safe_filename = self._sanitize_filename(original_filename)
+        cache_filename = f"{email_id}_{attachment_index}_{safe_filename}"
+        cache_path = cache_dir / cache_filename
+        
+        # Check if already cached (verify size matches)
+        if cache_path.exists():
+            cached_size = cache_path.stat().st_size
+            if cached_size == expected_size or expected_size == 0:
+                logger.info(f"Attachment found in cache: {cache_path}")
+                return {
+                    "success": True,
+                    "cached_path": str(cache_path),
+                    "original_filename": original_filename,
+                    "size_bytes": cached_size,
+                    "content_type": attachment_meta.get('content_type'),
+                    "from_cache": True
+                }
+            else:
+                logger.warning(
+                    f"Cache size mismatch ({cached_size} vs {expected_size}), re-downloading"
+                )
+                cache_path.unlink()
+        
+        # Download from backend with extended timeout for large files
+        url = f"/api/emails/{email_id}/attachments/{attachment_index}/download"
+        download_timeout = int(os.getenv("MCP_ATTACHMENT_DOWNLOAD_TIMEOUT", "120"))
+        
+        # Track content type and filename from response for return value
+        content_type = None
+        server_filename = None  # Filename from Content-Disposition header (properly decoded)
+        
+        try:
+            # Use streaming for large files to avoid memory issues
+            # For files > 10MB, stream; otherwise read all at once
+            use_streaming = expected_size > 10 * 1024 * 1024 if expected_size > 0 else False
+            
+            async with httpx.AsyncClient(timeout=download_timeout, verify=not MCP_SKIP_SSL_VERIFY) as http_client:
+                full_url = urljoin(self.base_url + "/", url.lstrip('/'))
+                
+                # Build headers with signing if available
+                headers = dict(self.headers)
+                if self._use_signing:
+                    sign_headers = self._sign_request("GET", url, b"")
+                    headers.update(sign_headers)
+                
+                if use_streaming:
+                    # Streaming download for large files (memory-efficient)
+                    async with http_client.stream("GET", full_url, headers=headers) as response:
+                        # Check status before streaming
+                        if response.status_code == 403:
+                            return {"error": "Attachment downloads not enabled on backend. Set ENABLE_ATTACHMENT_API=true"}
+                        elif response.status_code == 404:
+                            return {"error": f"Email or attachment not found"}
+                        elif response.status_code == 410:
+                            return {"error": "Email no longer available on IMAP server"}
+                        elif response.status_code == 413:
+                            return {"error": f"Attachment exceeds size limit ({os.getenv('ATTACHMENT_MAX_SIZE_MB', '50')}MB)"}
+                        elif response.status_code == 503:
+                            return {"error": "IMAP server unavailable. Please try again later."}
+                        
+                        response.raise_for_status()
+                        content_type = response.headers.get('Content-Type')
+                        server_filename = self._extract_filename_from_content_disposition(
+                            response.headers.get('Content-Disposition', '')
+                        )
+                        
+                        # Stream to file
+                        with open(cache_path, 'wb') as f:
+                            async for chunk in response.aiter_bytes(chunk_size=8192):
+                                f.write(chunk)
+                else:
+                    # Non-streaming download for small files (simpler, < 10MB)
+                    response = await http_client.get(full_url, headers=headers)
+                    
+                    # Handle HTTP errors with user-friendly messages
+                    if response.status_code == 403:
+                        return {"error": "Attachment downloads not enabled on backend. Set ENABLE_ATTACHMENT_API=true"}
+                    elif response.status_code == 404:
+                        return {"error": f"Email or attachment not found"}
+                    elif response.status_code == 410:
+                        return {"error": "Email no longer available on IMAP server"}
+                    elif response.status_code == 413:
+                        return {"error": f"Attachment exceeds size limit ({os.getenv('ATTACHMENT_MAX_SIZE_MB', '50')}MB)"}
+                    elif response.status_code == 503:
+                        return {"error": "IMAP server unavailable. Please try again later."}
+                    
+                    response.raise_for_status()
+                    content_type = response.headers.get('Content-Type')
+                    server_filename = self._extract_filename_from_content_disposition(
+                        response.headers.get('Content-Disposition', '')
+                    )
+                    
+                    # Write file directly
+                    with open(cache_path, 'wb') as f:
+                        f.write(response.content)
+                    
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error downloading attachment: {e.response.status_code} - {e.response.text}")
+            return {"error": f"Backend error: {e.response.status_code}"}
+        except httpx.RequestError as e:
+            logger.error(f"Request error downloading attachment: {e}")
+            return {"error": f"Failed to connect to backend: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Unexpected error downloading attachment: {e}", exc_info=True)
+            return {"error": f"Download failed: {str(e)}"}
+        
+        # Use server filename (properly decoded) if available, otherwise fall back to DB metadata
+        final_filename = server_filename if server_filename else original_filename
+        
+        return {
+            "success": True,
+            "cached_path": str(cache_path),
+            "original_filename": final_filename,
+            "size_bytes": cache_path.stat().st_size,
+            "content_type": content_type,
+            "from_cache": False
+        }
+    
+    async def list_imap_folders(self) -> Dict[str, Any]:
+        """
+        List all folders on the IMAP server.
+        
+        Calls: GET /api/imap/folders
+        
+        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
+        
+        Returns:
+            Dict with folders list and total count
+        """
+        params = {}
+        if self.allowed_account:
+            # Use only the first account if comma-separated
+            account = self.allowed_account.split(',')[0].strip()
+            params["account"] = account
+        
+        result = await self._request("GET", "/api/imap/folders", params=params)
+        return result
+    
+    async def get_folder_status(self, folder: str) -> Dict[str, Any]:
+        """
+        Get folder status (message counts) using IMAP STATUS command.
+        
+        This is the most efficient way to get folder statistics without
+        fetching any messages.
+        
+        Calls: GET /api/imap/folders/{folder}/status
+        
+        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
+        
+        Args:
+            folder: Folder name (e.g., "INBOX", "Sent", "Archive/2024")
+            
+        Returns:
+            Dict with:
+            - folder: Folder name
+            - total: Total number of messages in folder
+            - unseen: Number of unread messages
+            - recent: Number of recent messages
+            - uidnext: Next UID that will be assigned
+            - uidvalidity: UID validity value
+            - account: Account used
+        """
+        params = {}
+        
+        # Add account parameter from MCP_ALLOWED_ACCOUNT
+        if self.allowed_account:
+            account = self.allowed_account.split(',')[0].strip()
+            params["account"] = account
+        
+        # URL encode the folder path (handle slashes)
+        from urllib.parse import quote
+        encoded_folder = quote(folder, safe='')
+        
+        result = await self._request("GET", f"/api/imap/folders/{encoded_folder}/status", params=params)
+        return result
+    
+    async def list_folder_emails(
+        self,
+        folder: str,
+        limit: int = 50,
+        since_date: Optional[str] = None,
+        include_headers: bool = True
+    ) -> Dict[str, Any]:
+        """
+        List emails in a specific IMAP folder.
+        
+        Calls: GET /api/imap/folders/{folder}/messages
+        
+        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
+        
+        Args:
+            folder: Folder name (e.g., "INBOX", "Sent", "Archive/2024")
+            limit: Maximum number of messages (default: 50, max: 500)
+            since_date: Only messages since this date (YYYY-MM-DD)
+            include_headers: Include full headers like subject, from, date (default: True)
+            
+        Returns:
+            Dict with folder name, messages list, and total count
+        """
+        params = {
+            "limit": min(limit, 500),  # Enforce max
+            "include_headers": str(include_headers).lower()
+        }
+        
+        if since_date:
+            params["since_date"] = since_date
+        
+        # Add account parameter from MCP_ALLOWED_ACCOUNT
+        if self.allowed_account:
+            account = self.allowed_account.split(',')[0].strip()
+            params["account"] = account
+        
+        # URL encode the folder path (handle slashes)
+        from urllib.parse import quote
+        encoded_folder = quote(folder, safe='')
+        
+        result = await self._request("GET", f"/api/imap/folders/{encoded_folder}/messages", params=params)
+        return result
+    
+    async def clear_attachment_cache(self, older_than_days: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Clear attachment cache directory.
+        
+        Args:
+            older_than_days: If set, only delete files older than this many days
+            
+        Returns:
+            {"success": true, "files_deleted": 15, "bytes_freed": 52428800, "cache_dir": "..."}
+        """
+        cache_dir_str = os.getenv("MCP_ATTACHMENT_CACHE_DIR")
+        if not cache_dir_str:
+            return {"error": "MCP_ATTACHMENT_CACHE_DIR not configured"}
+        
+        cache_dir = Path(cache_dir_str).expanduser()
+        if not cache_dir.exists():
+            return {
+                "success": True,
+                "files_deleted": 0,
+                "bytes_freed": 0,
+                "cache_dir": str(cache_dir)
+            }
+        
+        files_deleted = 0
+        bytes_freed = 0
+        cutoff = datetime.now() - timedelta(days=older_than_days) if older_than_days else None
+        
+        for file in cache_dir.iterdir():
+            if file.is_file():
+                should_delete = True
+                if cutoff:
+                    mtime = datetime.fromtimestamp(file.stat().st_mtime)
+                    should_delete = mtime < cutoff
+                
+                if should_delete:
+                    size = file.stat().st_size
+                    file.unlink()
+                    files_deleted += 1
+                    bytes_freed += size
+        
+        return {
+            "success": True,
+            "files_deleted": files_deleted,
+            "bytes_freed": bytes_freed,
+            "cache_dir": str(cache_dir)
+        }

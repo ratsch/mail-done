@@ -1,0 +1,53 @@
+# Email Categories Configuration
+# Categories are loaded dynamically - add your custom categories via CONFIG_DIR overlay.
+# Format: category-name: "category-name"
+
+categories:
+  # Work
+  work-urgent: "work-urgent"
+  work-colleague: "work-colleague"
+  work-student: "work-student"
+  work-admin: "work-admin"
+  work-scheduling: "work-scheduling"
+  work-other: "work-other"
+
+  # Travel
+  travel-booking-confirm: "travel-booking-confirm"
+  travel-receipt: "travel-receipt"
+  travel-itinerary: "travel-itinerary"
+  travel-reminder: "travel-reminder"
+  travel-transport: "travel-transport"
+  travel-other: "travel-other"
+
+  # Newsletters
+  newsletter-scientific: "newsletter-scientific"
+  newsletter-general: "newsletter-general"
+
+  # Notifications
+  notification-system: "notification-system"
+  notification-technical: "notification-technical"
+  notification-calendar: "notification-calendar"
+  notification-social: "notification-social"
+  notification-other: "notification-other"
+
+  # Receipts
+  receipt-online: "receipt-online"
+  receipt-travel: "receipt-travel"
+  receipt-subscription: "receipt-subscription"
+
+  # Personal
+  personal-family: "personal-family"
+  personal-friends: "personal-friends"
+  personal-other: "personal-other"
+
+  # Other
+  marketing: "marketing"
+  spam: "spam"
+  social-media: "social-media"
+
+  # Legacy/compatibility
+  personal: "personal"
+  work: "work"
+  receipt: "receipt"
+  newsletter: "newsletter"
+  notification: "notification"

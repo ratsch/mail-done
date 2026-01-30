@@ -1,0 +1,101 @@
+# Inquiry Response Templates
+# Used to generate draft responses for application/inquiry emails
+#
+# Placeholders:
+#   {full_name} - Sender's extracted name (or "prospective applicant")
+#   {inquiry_summary} - Human-readable summary of inquiry types
+
+greeting: |
+  Dear {full_name},
+
+  Thank you for your email inquiring about {inquiry_summary}.
+
+blocks:
+  internship: |
+
+    ## Internship Opportunities
+
+    We occasionally host students for summer research internships (typically 2-3 months).
+    These positions are not formally advertised and depend on current project needs
+    and funding availability.
+
+    If you are interested in an internship, please send a formal application including:
+    - Your CV
+    - A brief statement describing your research interests and relevant experience
+    - Your availability (start date, duration)
+    - Whether you have your own funding or require financial support
+
+    Please note that we receive many inquiries and cannot accommodate all requests.
+
+  thesis: |
+
+    ## Bachelor's and Master's Thesis Projects
+
+    Our group accepts motivated students for thesis research projects. We maintain
+    a list of currently open project proposals and areas of interest on our website.
+
+    To apply for a thesis project, please:
+    - Review the available projects on our website
+    - Contact the listed supervisor directly, or contact us with your own project idea
+    - Include your transcript and a brief description of your interests
+
+    Note: Thesis projects are typically only available to students enrolled at our
+    institution.
+
+  phd: |
+
+    ## PhD Positions
+
+    PhD positions are typically advertised when available. However, we also consider
+    strong candidates who reach out directly.
+
+    For PhD applications, please include:
+    - Your CV
+    - Transcripts (Bachelor's and Master's if applicable)
+    - A research statement (1-2 pages) describing your interests
+    - Names and contact information for 2-3 references
+
+    Competitive candidates typically have:
+    - Strong academic record
+    - Research experience (publications are a plus)
+    - Relevant technical skills
+
+  postdoc: |
+
+    ## Postdoctoral Positions
+
+    Postdoctoral positions are advertised when funded positions become available.
+    We also support applications to external fellowship programs.
+
+    For postdoc applications, please include:
+    - Your CV with publication list
+    - A research statement (2-3 pages)
+    - Names and contact information for 3 references
+
+    Fellowship programs to consider:
+    - [Add relevant fellowship programs for your institution/country]
+
+  visiting: |
+
+    ## Visiting Researchers
+
+    We occasionally host visiting researchers for collaborative projects.
+    These visits typically require:
+    - Clear research overlap with ongoing projects
+    - External funding or institutional support
+    - A defined duration (typically 3-12 months)
+
+    Please contact us with:
+    - A brief description of your research and proposed collaboration
+    - Your availability and funding situation
+
+closing: |
+
+  Best regards,
+  [Your Name/Lab Name]
+
+# Email-specific variations (optional)
+variations:
+  short_internship_response: |
+    Thank you for your interest. Please see our website for internship information.
+    We receive many requests and cannot respond individually to all inquiries.

@@ -1,0 +1,67 @@
+# Email Classification Prompt Versions
+#
+# This file tracks all prompt versions for the AI email classifier.
+# Use this to manage prompt evolution, A/B testing, and cost optimization.
+
+# Current active version (change this to switch versions globally)
+current_version: "v1.0"
+
+# Version definitions
+versions:
+  v1.0:
+    created: "2025-01-01"
+    description: "Initial production prompt"
+    estimated_tokens: 2100
+    status: "production"
+    performance:
+      accuracy: "High (95%+ confidence on test set)"
+      cost_per_1k_emails_gpt4o: "$27-32"
+      cost_per_1k_emails_gpt4o_mini: "$0.97-1.15"
+      avg_tokens_per_email: "4900-5500"
+    notes: |
+      - Comprehensive category definitions
+      - Detailed analysis requirements
+      - Includes answer_options generation for drafts
+      - Best for high-accuracy needs
+    changes_from_previous: "Initial version"
+
+# Model recommendations per version
+model_recommendations:
+  v1.0:
+    best_model: "gpt-4o-mini"
+    reason: "Comprehensive prompt works well with cheaper model"
+    alternative: "gpt-4o for critical VIP emails only"
+
+# A/B Testing configuration (optional)
+ab_testing:
+  enabled: false
+  split_ratio: 0.5  # 50/50 split
+  version_a: "v1.0"
+  version_b: "v1.0"  # Change to v2.0 when testing new version
+  metrics_to_track:
+    - accuracy
+    - avg_confidence
+    - cost_per_email
+    - processing_time
+    - validation_error_rate
+
+# Cost tracking (update with current OpenAI pricing)
+cost_estimates:
+  gpt-4o:
+    input_per_1m: 5.00
+    output_per_1m: 15.00
+  gpt-4o-mini:
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+  embeddings:
+    text-embedding-3-small: 0.02
+    text-embedding-3-large: 0.13
+
+# Changelog
+changelog:
+  - version: "v1.0"
+    date: "2025-01-01"
+    changes:
+      - "Initial production prompt"
+      - "Category definitions"
+      - "Analysis requirements"

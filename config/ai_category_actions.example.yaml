@@ -1,0 +1,392 @@
+# AI Category to Action Mapping
+#
+# PHILOSOPHY:
+# - Organize into MD/ (MailDone) subfolder structure
+# - Flag critical categories (work-urgent, invitation-speaking)
+# - Auto-move bulk/noise to subfolders
+# - Use database search/filters for finding specific types
+# - Support multi-category classification (primary + optional secondary/tertiary)
+#
+# Multi-Category Configuration:
+# - Primary category (always): Determines folder routing
+# - Secondary category (~5%): Email needs action in second area
+# - Tertiary category (<1%): Rarely, email needs action in third area
+# - Multi-category emails stay in inbox by default for review
+#
+# Folder Structure:
+#   MD/Applications/   - Application emails (PhD, Postdoc, etc.)
+#   MD/Reviews/        - Review requests
+#   MD/Personal/       - Personal correspondence
+#   MD/Newsletters/    - Scientific journals, mailing lists
+#   MD/Notifications/  - Automated systems (Sentry, calendar, social)
+#   MD/Receipts/       - Purchases, travel bookings
+#   MD/Marketing/      - Promotional emails
+#   MD/Spam/           - Junk
+#   MD/Publications/   - Publication lifecycle (submission, decisions, proofs)
+#   MD/Grants/         - Grant lifecycle (submission, decisions, reporting)
+#   MD/Travel/         - Travel bookings, itineraries, receipts
+
+# =============================================================================
+# IMPORTANT CATEGORIES - STAY IN INBOX OR GET ORGANIZED
+# =============================================================================
+
+# Work emails (always route to work account)
+work-urgent:
+  action: color
+  color: 1  # Red flag - CRITICAL
+  target_account: work
+
+work-colleague:
+  action: color
+  color: 5  # Blue flag - NEEDS REPLY
+  target_account: work
+
+work-student:
+  action: keep
+  target_account: work
+
+work-admin:
+  action: keep
+  target_account: work
+
+work-no-action-needed:
+  action: keep
+  target_account: work
+
+work-other:
+  action: keep
+  target_account: work
+
+# Applications (move to organized subfolders)
+application-phd:
+  action: move
+  folder: "MD/Applications/PhD"
+  target_account: work
+
+application-postdoc:
+  action: move
+  folder: "MD/Applications/Postdoc"
+  target_account: work
+
+application-intern:
+  action: move
+  folder: "MD/Applications/Intern"
+  target_account: work
+
+application-bsc-msc-thesis:
+  action: move
+  folder: "MD/Applications/BScMScThesis"
+  target_account: work
+
+application-visiting:
+  action: move
+  folder: "MD/Applications/Visiting"
+  target_account: work
+
+application-other:
+  action: move
+  folder: "MD/Applications/Other"
+  target_account: work
+
+# Invitations (stay in inbox, speaking flagged)
+invitation-speaking:
+  action: color
+  color: 3  # Yellow flag - IMPORTANT OPPORTUNITY
+
+invitation-committee:
+  action: keep
+
+invitation-grant:
+  action: keep
+
+invitation-editorial:
+  action: keep
+
+invitation-advisory:
+  action: keep
+
+invitation-event:
+  action: keep
+
+invitation-collaboration:
+  action: keep
+
+# Reviews (some move to subfolders)
+review-peer-journal:
+  action: move
+  folder: "MD/Reviews/PeerJournal"
+
+review-peer-conference:
+  action: move
+  folder: "MD/Reviews/PeerConference"
+
+review-grant:
+  action: move
+  folder: "MD/Reviews/Grant"
+
+review-phd-committee:
+  action: keep
+
+review-hiring:
+  action: keep
+
+review-promotion:
+  action: color
+  color: 2  # Orange flag - CRITICAL EVALUATION
+
+review-other:
+  action: keep
+
+# Publications (move to Publications folder)
+publication-submission-confirm:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+
+publication-decision-accept:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+  color: 4  # Green flag - SUCCESS
+
+publication-decision-reject:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+  color: 2  # Orange flag - NEEDS FOLLOW-UP
+
+publication-revision-request:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+  color: 3  # Yellow flag - TIME-SENSITIVE
+
+publication-proofs:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+  color: 3  # Yellow flag - TIME-SENSITIVE
+
+publication-published:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+
+publication-other:
+  action: move
+  folder: "MD/Publications"
+  target_account: work
+
+# Grants (move to Grants folder)
+grant-submission-confirm:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+
+grant-decision-awarded:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+  color: 4  # Green flag - SUCCESS
+
+grant-decision-rejected:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+  color: 2  # Orange flag - NEEDS FOLLOW-UP
+
+grant-budget:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+
+grant-reporting:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+  color: 3  # Yellow flag - TIME-SENSITIVE
+
+grant-modification:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+
+grant-other:
+  action: move
+  folder: "MD/Grants"
+  target_account: work
+
+# Projects (add your own project categories)
+# Example:
+# project-my-project:
+#   action: move
+#   folder: "MD/Projects/MyProject"
+#   target_account: work
+#   color: 5  # Blue flag - Collaborative project
+
+# Travel (move to Travel folder)
+travel-booking-confirm:
+  action: move
+  folder: "MD/Travel"
+  color: 3  # Yellow flag - Important travel info
+
+travel-receipt:
+  action: move
+  folder: "MD/Travel"
+
+travel-itinerary:
+  action: move
+  folder: "MD/Travel"
+  color: 3  # Yellow flag - Important travel info
+
+travel-reminder:
+  action: move
+  folder: "MD/Travel"
+  color: 3  # Yellow flag - Time-sensitive
+
+travel-transport:
+  action: move
+  folder: "MD/Travel"
+
+travel-other:
+  action: move
+  folder: "MD/Travel"
+
+# Personal (move to personal account)
+personal-family:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-friends:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-transaction:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-health:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+  color: 3  # Yellow flag - medical appointments may be time-sensitive
+
+personal-hobby:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-travel:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-shopping:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-other:
+  action: move
+  folder: "MD/Personal"
+  target_account: personal
+
+personal-finance:
+  action: move
+  folder: "MD/Finance"
+  target_account: personal
+
+# =============================================================================
+# SAFE CATEGORIES - AUTO-MOVE (Noise Reduction)
+# =============================================================================
+
+# NEWSLETTERS - Batch reading later
+newsletter-scientific:
+  action: move
+  folder: "MD/Newsletters"
+
+newsletter-general:
+  action: move
+  folder: "MD/Newsletters"
+
+# NOTIFICATIONS - Automated systems (low priority)
+notification-technical:
+  action: move
+  folder: "MD/Notifications"
+
+notification-calendar:
+  action: move
+  folder: "MD/Notifications"
+
+notification-social:
+  action: move
+  folder: "MD/Notifications"
+
+notification-other:
+  action: move
+  folder: "MD/Notifications"
+
+# RECEIPTS - Reference/archival
+receipt-online:
+  action: move
+  folder: "MD/Receipts"
+
+receipt-travel:
+  action: move
+  folder: "MD/Receipts"
+
+receipt-subscription:
+  action: move
+  folder: "MD/Receipts"
+
+receipt-reimbursement:
+  action: move
+  folder: "MD/Receipts"
+
+# MARKETING - Promotional noise
+marketing:
+  action: move
+  folder: "MD/Marketing"
+
+# SPAM - Obvious junk
+spam:
+  action: move
+  folder: "MD/Spam"
+
+# SOCIAL MEDIA - Platform notifications
+social-media:
+  action: move
+  folder: "MD/Notifications"
+
+# DEFAULT - Unknown categories stay in inbox
+default:
+  action: keep
+
+# =============================================================================
+# MULTI-CATEGORY CONFIGURATION
+# =============================================================================
+#
+# Handles emails classified with 2 or 3 categories
+# Primary category determines base action, but can be overridden
+#
+multi_category_config:
+  # Default behavior for emails with multiple categories
+  default_action: "keep_in_inbox"  # Options: "keep_in_inbox" or "use_primary_folder"
+
+  # Visual indicators for multi-category emails
+  two_category:
+    color: 6  # Purple flag - indicates email has 2 categories
+    labels: ["multi-category", "needs-review"]
+
+  three_category:
+    color: 2  # Orange flag - rare, indicates complex email with 3 categories
+    labels: ["multi-category", "complex", "needs-review"]
+
+  # Statistics tracking (for monitoring)
+  expected_rates:
+    single_category: 0.95    # 95% of emails
+    two_categories: 0.048    # ~5% of emails
+    three_categories: 0.01   # <1% of emails

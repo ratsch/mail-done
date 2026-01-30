@@ -1,0 +1,35 @@
+# Static Client Registry
+#
+# Defines clients with permanent keypairs (not OAuth-based).
+# These clients don't go through the OAuth handshake - they use
+# static Ed25519 keypairs registered here.
+#
+# See: docs/SECURITY_DESIGN_REQUEST_SIGNING.md
+#
+# Generating a keypair:
+#   python -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; \
+#              import base64; \
+#              pk = Ed25519PrivateKey.generate(); \
+#              print('Private:', base64.b64encode(pk.private_bytes_raw()).decode()); \
+#              print('Public:', base64.b64encode(pk.public_key().public_bytes_raw()).decode())"
+
+clients:
+  # Example: Local admin scripts with full access
+  laptop-admin:
+    description: "Local laptop scripts with full admin access"
+    public_keys:
+      # Replace with your actual public key (base64-encoded Ed25519)
+      - "YOUR_BASE64_PUBLIC_KEY_HERE"
+    scopes:
+      - "*"  # Full access
+    enabled: true
+
+  # Example: CI/CD automation with limited access
+  # automation-bot:
+  #   description: "CI/CD automation"
+  #   public_keys:
+  #     - "base64-encoded-public-key-here"
+  #   scopes:
+  #     - "emails:read"
+  #     - "stats:read"
+  #   enabled: true
