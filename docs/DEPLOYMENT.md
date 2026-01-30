@@ -759,17 +759,30 @@ The script will:
 ./deploy/deploy-pi.sh --clean   # Remove containers, volumes, and configs
 ```
 
-### Step 6: Initialize Database Tables
+### Step 6: Database Migrations
 
-After the first deployment, initialize the database schema:
+The API container automatically runs database migrations on startup. For manual control:
 
 ```bash
-podman exec mail-done-api python3 -c "
-from backend.core.database.connection import init_db, create_tables
-init_db()
-create_tables()
-print('Database tables created successfully')
-"
+# Check current migration status
+podman exec mail-done-api alembic current
+
+# Run pending migrations manually
+podman exec mail-done-api alembic upgrade head
+
+# For existing databases with tables already created, stamp without running:
+podman exec mail-done-api alembic stamp head
+```
+
+**Migration Flow:**
+1. Docker `init-db.sql` creates PostgreSQL extensions (pgvector, uuid-ossp, pg_trgm)
+2. API container runs `alembic upgrade head` on startup
+3. Alembic creates all tables and indexes if missing
+
+**For existing production databases** that already have all tables (like nvme-pi):
+```bash
+# Mark as current without running migrations
+./scripts/db_migrate.sh --stamp
 ```
 
 ### Step 7: Verify Deployment
@@ -970,12 +983,8 @@ podman run -d \
     -v "$PWD/config:/app/config:ro" \
     localhost/deploy_api:latest
 
-# Initialize tables
-podman exec mail-done-api python3 -c "
-from backend.core.database.connection import init_db, create_tables
-init_db()
-create_tables()
-"
+# Run migrations (creates tables/indexes)
+podman exec mail-done-api alembic upgrade head
 ```
 
 ### Raspberry Pi Troubleshooting
@@ -1044,13 +1053,14 @@ registries = ['docker.io']
 
 **Cause:** Database schema not initialized.
 
-**Solution:** Run table creation:
+**Solution:** Run migrations:
 ```bash
-podman exec mail-done-api python3 -c "
-from backend.core.database.connection import init_db, create_tables
-init_db()
-create_tables()
-"
+podman exec mail-done-api alembic upgrade head
+```
+
+For existing databases that already have tables but no migration tracking:
+```bash
+podman exec mail-done-api alembic stamp head
 ```
 
 #### Container Keeps Restarting
