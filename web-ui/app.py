@@ -240,6 +240,7 @@ except (ImportError, ValueError) as e:
 
 # Configuration
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
+BACKEND_API_KEY = os.getenv("API_KEY", "")
 
 # OAuth Configuration
 # Web-UI now delegates OAuth to the backend - no Google credentials needed here!
@@ -487,8 +488,32 @@ async def make_signed_request(
     """
     Make a signed request to the Backend API using OAuth session.
 
-    Requires valid OAuth session - no fallback to API key.
+    If AUTH_DISABLED=true and API_KEY is set, uses simple API key auth instead.
+    Otherwise requires valid OAuth session.
     """
+    # When auth is disabled, use API key authentication
+    if AUTH_DISABLED:
+        if not BACKEND_API_KEY:
+            raise HTTPException(
+                status_code=503,
+                detail="API_KEY not configured. Set API_KEY in .env for AUTH_DISABLED mode."
+            )
+        # Make request with API key header
+        base_url = f"{BACKEND_API_URL.rstrip('/')}{path}"
+        headers = {"X-API-Key": BACKEND_API_KEY, "Content-Type": "application/json"}
+        body = None
+        if json_data:
+            import json
+            body = json.dumps(json_data).encode("utf-8")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.request(
+                method=method,
+                url=base_url,
+                params=params,
+                content=body,
+                headers=headers,
+            )
+
     if not session:
         raise HTTPException(
             status_code=401,
