@@ -5,48 +5,51 @@
 
 # Provider profiles (define credentials once)
 providers:
-  azure_sweden:
-    type: azure
-    endpoint_env: AZURE_OPENAI_SWEDEN_ENDPOINT
-    api_key_env: AZURE_OPENAI_SWEDEN_API_KEY
-    api_version: "2025-04-01-preview"
-
-  azure_west_europe:
-    type: azure
-    endpoint_env: AZURE_OPENAI_ENDPOINT
-    api_key_env: AZURE_OPENAI_API_KEY
-    api_version: "2025-04-01-preview"
-  
   openai:
     type: openai
     api_key_env: OPENAI_API_KEY
-  
+
   anthropic:
     type: anthropic
     api_key_env: ANTHROPIC_API_KEY
-  
+
   ollama:
     type: ollama
     base_url: "http://localhost:11434"
 
+  # Uncomment and configure if using Azure OpenAI:
+  # azure_sweden:
+  #   type: azure
+  #   endpoint_env: AZURE_OPENAI_SWEDEN_ENDPOINT
+  #   api_key_env: AZURE_OPENAI_SWEDEN_API_KEY
+  #   api_version: "2025-04-01-preview"
+  #
+  # azure_west_europe:
+  #   type: azure
+  #   endpoint_env: AZURE_OPENAI_ENDPOINT
+  #   api_key_env: AZURE_OPENAI_API_KEY
+  #   api_version: "2025-04-01-preview"
+
 # Model -> Provider mapping
 models:
-  # Azure Sweden
-  gpt-5.1: azure_sweden
-  gpt-5-pro: azure_sweden
-  
-  # Azure West Europe
-  gpt-5-mini: azure_west_europe
-  text-embedding-3-small: azure_west_europe
-  text-embedding-3-large: azure_west_europe
-  
+  # OpenAI (recommended for most users)
+  gpt-4o: openai
+  gpt-4o-mini: openai
+  text-embedding-3-small: openai
+  text-embedding-3-large: openai
+
   # Anthropic
   claude-3-5-sonnet-20241022: anthropic
   claude-3-haiku-20240307: anthropic
-  
-  # Ollama
+
+  # Ollama (local models)
   llama3: ollama
   mistral: ollama
 
+  # Uncomment if using Azure OpenAI:
+  # gpt-5.1: azure_sweden
+  # gpt-5-pro: azure_sweden
+  # gpt-5-mini: azure_west_europe
+
 # Default for unknown models
-default: azure_west_europe
+default: openai
