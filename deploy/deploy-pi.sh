@@ -161,6 +161,7 @@ build_and_start() {
 
     # Start PostgreSQL
     log_info "Starting database..."
+    # Note: Removed memory limits due to cgroups issues on some Pi configurations
     podman run -d \
         --name mail-done-db \
         --network host \
@@ -171,8 +172,6 @@ build_and_start() {
         -e PGPORT="${POSTGRES_PORT:-5432}" \
         -v mail-done-db-data:/var/lib/postgresql/data \
         -v "$PROJECT_DIR/deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
-        --memory 1g \
-        --memory-reservation 256m \
         pgvector/pgvector:pg16 || {
             log_warn "Container may already exist. Trying to start..."
             podman start mail-done-db
