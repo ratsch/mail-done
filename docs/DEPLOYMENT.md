@@ -398,6 +398,41 @@ cd ~/mail-done-config && git pull
 cd ~/mail-done && ./deploy/deploy-pi.sh --stop && ./deploy/deploy-pi.sh
 ```
 
+### Syncing Credentials for Local Use
+
+For local tools (MCP server, `process_inbox.py`) to connect to your deployed API, copy the generated credentials from the Pi to your local `.env`:
+
+```bash
+# Copy credentials from Pi to local .env
+ssh pi@your-pi 'grep -E "^(API_KEY|DB_ENCRYPTION_KEY)=" ~/mail-done/.env' >> ~/mail-done/.env
+
+# Or manually add to your local .env:
+API_KEY=<from-pi>
+DB_ENCRYPTION_KEY=<from-pi>
+```
+
+**Why these are needed locally:**
+
+| Credential | Local Use Case |
+|------------|----------------|
+| `API_KEY` | MCP server, web-ui, any API client |
+| `DB_ENCRYPTION_KEY` | `process_inbox.py` if connecting to remote database |
+
+**For MCP server configuration** (`~/.claude/claude_code_config.json`):
+```json
+{
+  "mcpServers": {
+    "email-search": {
+      "command": "/path/to/mail-done/run_mcp_server.sh",
+      "env": {
+        "BACKEND_API_KEY": "<your-API_KEY>",
+        "EMAIL_API_URL": "http://your-pi:8000"
+      }
+    }
+  }
+}
+```
+
 ### Overlay Directory Structure
 
 ```
