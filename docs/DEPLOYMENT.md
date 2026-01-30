@@ -9,6 +9,7 @@ This guide covers deploying mail-done to a self-hosted server using Docker or Po
 > - [Database Schema](DATABASE.md) - PostgreSQL structure
 > - [Gmail Setup](GMAIL_SETUP.md) - App Passwords for Gmail/Google Workspace
 > - [Outlook OAuth2](OUTLOOK_OAUTH2.md) - Microsoft 365 authentication
+> - [LLM Configuration](LLM_CONFIGURATION.md) - Multi-provider AI setup
 
 ## Prerequisites
 
@@ -32,7 +33,7 @@ DB_ENCRYPTION_KEY=<generated>
 IMAP_USERNAME_WORK=your.email@example.com
 IMAP_PASSWORD_WORK=your-app-password  # or OAUTH2_REFRESH_TOKEN_WORK for OAuth2
 
-# LLM for classification
+# LLM for classification (see LLM_CONFIGURATION.md for Azure/multi-provider)
 OPENAI_API_KEY=sk-...
 ```
 
