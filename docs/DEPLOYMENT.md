@@ -530,6 +530,20 @@ LOG_imapsync/
 
 **Solution:** The deploy script uses direct `podman run` commands to bypass this. If using podman-compose directly, this error can be ignored if containers start anyway.
 
+#### Registry Resolution Error
+
+**Problem:** `short-name "pgvector/pgvector:pg16" did not resolve to an alias and no unqualified-search registries are defined`
+
+**Cause:** Podman on some systems doesn't have Docker Hub configured as a default registry.
+
+**Solution:** The deploy script now uses full image paths (`docker.io/pgvector/pgvector:pg16`). If you encounter this with other images, use the full path format: `docker.io/image:tag`
+
+Alternatively, configure registries in `/etc/containers/registries.conf`:
+```ini
+[registries.search]
+registries = ['docker.io']
+```
+
 #### Memory Cgroups Error
 
 **Problem:** `crun: opening file 'memory.max' for writing: No such file or directory`
