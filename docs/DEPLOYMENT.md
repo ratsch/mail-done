@@ -241,14 +241,28 @@ For schema details and direct queries, see [docs/DATABASE.md](DATABASE.md).
 
 ## Private Configuration Overlay
 
-> **⚠️ Important:** The config overlay must exist on **both** your local machine (for running `process_inbox.py`) **and** on the deployment target (Pi/server). Otherwise, local processing and the deployed API will use different configurations.
-
 ### Why Use a Private Overlay?
 
-- **VIP sender lists**: Keep your priority contacts private
-- **Classification rules**: Customize for your organization
-- **Email accounts**: Your IMAP server settings
-- **Custom prompts**: Organization-specific AI instructions
+The mail-done repository contains **example** config files (`*.example.yaml`) that are safe to share publicly. However, your actual configuration contains **private information**:
+
+| What's Private | Why It Matters |
+|----------------|----------------|
+| VIP sender lists | Reveals your important contacts |
+| Email accounts | Contains your IMAP server hostnames |
+| Classification rules | Shows your organizational structure |
+| Custom prompts | May contain proprietary instructions |
+
+**Solution:** Keep your private configs in a **separate private repository** that you control.
+
+### Benefits of Using an Overlay
+
+1. **Security**: Private data stays in a private repo, not in the public mail-done repo
+2. **Portability**: Clone your config to any machine (laptop, server, Pi)
+3. **Versioning**: Track changes to your rules over time with git
+4. **Consistency**: Same config on local machine and deployed server
+5. **Updates**: Update mail-done without losing your customizations
+
+> **⚠️ Important:** The config overlay must exist on **both** your local machine (for running `process_inbox.py`) **and** on the deployment target (Pi/server). Otherwise, local processing and the deployed API will use different configurations.
 
 ### How It Works
 
@@ -264,33 +278,43 @@ process_inbox.py               FastAPI (deployed)
 
 **Both** use the same config, ensuring consistent behavior.
 
-### Step 1: Create Private Config Repository
+### Step 1: Generate Config Overlay
 
-On your **local machine**:
+Use the provided script to create a config overlay:
 
 ```bash
-# Create private config repo
-mkdir ~/mail-done-config
+# Generate recommended config overlay
+./scripts/init-config-overlay.sh ~/mail-done-config
+
+# Or minimal (just accounts + VIP senders)
+./scripts/init-config-overlay.sh ~/mail-done-config --minimal
+
+# Or full (all config files)
+./scripts/init-config-overlay.sh ~/mail-done-config --full
+```
+
+The script will:
+1. Create the directory structure
+2. Copy example configs as starting points
+3. Initialize a git repository
+4. Create a README with usage instructions
+
+### Step 2: Customize Your Configs
+
+```bash
 cd ~/mail-done-config
-git init
 
-# Create on GitHub/GitLab as a PRIVATE repo
-# git remote add origin git@github.com:you/mail-done-config.git
+# Required: Configure your email accounts
+vim accounts.yaml
+
+# Recommended: Add your VIP senders
+vim vip_senders.yaml
+
+# Optional: Customize classification rules
+vim classification_rules.yaml
 ```
 
-### Step 2: Copy and Customize Configs
-
-```bash
-# Copy configs you need to customize
-cp ~/mail-done/config/accounts.example.yaml ~/mail-done-config/accounts.yaml
-cp ~/mail-done/config/vip_senders.example.yaml ~/mail-done-config/vip_senders.yaml
-cp ~/mail-done/config/classification_rules.example.yaml ~/mail-done-config/classification_rules.yaml
-cp ~/mail-done/config/ai_category_actions.example.yaml ~/mail-done-config/ai_category_actions.yaml
-
-# Edit with your settings
-vim ~/mail-done-config/accounts.yaml
-vim ~/mail-done-config/vip_senders.yaml
-```
+**Minimum required:** `accounts.yaml` with your IMAP server settings.
 
 ### Step 3: Configure Local Environment
 
