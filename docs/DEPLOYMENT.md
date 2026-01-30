@@ -7,6 +7,8 @@ This guide covers deploying mail-done to a self-hosted server using Docker or Po
 > - [MCP Server](MCP.md) - Integrate with Claude, Cursor
 > - [API Reference](API.md) - REST API endpoints
 > - [Database Schema](DATABASE.md) - PostgreSQL structure
+> - [Gmail Setup](GMAIL_SETUP.md) - App Passwords for Gmail/Google Workspace
+> - [Outlook OAuth2](OUTLOOK_OAUTH2.md) - Microsoft 365 authentication
 
 ## Prerequisites
 
@@ -26,9 +28,9 @@ To get mail-done running with basic functionality, you need only:
 POSTGRES_PASSWORD=<generated>
 DB_ENCRYPTION_KEY=<generated>
 
-# Email account
+# Email account (see provider-specific guides below)
 IMAP_USERNAME_WORK=your.email@example.com
-IMAP_PASSWORD_WORK=your-app-password
+IMAP_PASSWORD_WORK=your-app-password  # or OAUTH2_REFRESH_TOKEN_WORK for OAuth2
 
 # LLM for classification
 OPENAI_API_KEY=sk-...
@@ -49,6 +51,10 @@ accounts:
 settings:
   default_account: work
 ```
+
+> **Provider-Specific Setup:**
+> - **Gmail / Google Workspace**: Requires App Password. See [Gmail Setup](GMAIL_SETUP.md)
+> - **Microsoft 365 / Outlook**: Requires OAuth2. See [Outlook OAuth2](OUTLOOK_OAUTH2.md)
 
 ### Optional Config Files
 
