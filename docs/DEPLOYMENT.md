@@ -456,6 +456,53 @@ Expected health response:
 }
 ```
 
+**Comprehensive Functional Test:**
+
+Use the provided test script to verify all components:
+
+```bash
+# Test local deployment
+python3 deploy/test-deployment.py
+
+# Test remote deployment
+python3 deploy/test-deployment.py http://hostname:8000
+```
+
+Expected output:
+```
+============================================================
+  Mail-Done Deployment Tests
+  Target: http://localhost:8000
+============================================================
+
+Core Health Checks:
+✓ Health endpoint accessible
+✓ Status is healthy
+✓ Database connected
+✓ Database health check passed
+
+API Information:
+✓ Root endpoint accessible
+✓ Version info present
+✓ Features listed
+  Version: 2.0.0
+
+API Documentation:
+✓ OpenAPI spec accessible
+✓ API has endpoints defined (91 found)
+
+Authentication Enforcement:
+✓ Stats requires auth (401)
+✓ Emails requires auth (401)
+✓ Admin endpoints require auth (401)
+✓ Applications requires auth (401)
+
+============================================================
+  All 13 tests passed!
+  Deployment is working correctly.
+============================================================
+```
+
 ### Manual Deployment (Alternative)
 
 If you prefer manual control or the script doesn't work:
