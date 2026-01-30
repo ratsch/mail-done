@@ -172,7 +172,7 @@ build_and_start() {
         -e PGPORT="${POSTGRES_PORT:-5432}" \
         -v mail-done-db-data:/var/lib/postgresql/data \
         -v "$PROJECT_DIR/deploy/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
-        pgvector/pgvector:pg16 || {
+        docker.io/pgvector/pgvector:pg16 || {
             log_warn "Container may already exist. Trying to start..."
             podman start mail-done-db
         }
