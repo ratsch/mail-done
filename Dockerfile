@@ -33,6 +33,6 @@ COPY . .
 EXPOSE 8080
 
 # Start application (use shell form to allow $PORT expansion)
-# Run migrations at startup (when DATABASE_URL is available)
-CMD sh -c "poetry run alembic upgrade head && poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+# Run migrations at startup only if alembic.ini exists
+CMD sh -c "[ -f alembic.ini ] && poetry run alembic upgrade head; poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"
 
