@@ -271,7 +271,7 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Railway (no auth required)"""
+    """Health check endpoint (no auth required)"""
     from sqlalchemy import text
     from backend.core.database import get_db
     

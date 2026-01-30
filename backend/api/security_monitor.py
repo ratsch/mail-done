@@ -269,7 +269,7 @@ If the API is locked, you can unlock it by calling:
   with header X-Unlock-Key: <your SECURITY_UNLOCK_KEY from .env>
 
 NOTE: The unlock key is NOT included in this email for security reasons.
-Retrieve it from your .env file or Railway environment variables.
+Retrieve it from your .env file or server environment variables.
 """
             
             msg.attach(MIMEText(body, "plain"))

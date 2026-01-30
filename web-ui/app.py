@@ -3,7 +3,7 @@
 Mail-Done Web UI
 Local web interface for email processing system
 
-This is a lightweight web UI that proxies requests to the Railway API.
+This is a lightweight web UI that proxies requests to the Backend API.
 It provides a user-friendly interface for:
 - Semantic search
 - Cost overview
@@ -182,7 +182,7 @@ rate_limiter = RateLimiter()
 
 def get_client_ip(request: Request) -> str:
     """Extract client IP from request, handling proxies"""
-    # Check for forwarded headers (Railway, nginx, etc.)
+    # Check for forwarded headers (Backend, nginx, etc.)
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         # Take the first IP in the chain
@@ -235,11 +235,11 @@ except (ImportError, ValueError) as e:
     # ImportError: raised when backend modules not in path
     print(f"ℹ️  Running in zero-knowledge mode (no local database access)")
     print(f"   Reason: {e}")
-    print("   All requests will proxy to Railway API")
+    print("   All requests will proxy to Backend API")
     DATABASE_AVAILABLE = False
 
 # Configuration
-RAILWAY_API_URL = os.getenv("RAILWAY_API_URL", "https://your-railway-app.railway.app")
+BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
 # OAuth Configuration
 # Web-UI now delegates OAuth to the backend - no Google credentials needed here!
@@ -253,13 +253,13 @@ OAUTH_ENABLED = OAUTH_AVAILABLE
 
 if OAUTH_ENABLED:
     print("✅ OAuth enabled (zero-knowledge mode - backend handles Google OAuth)")
-    print(f"   Backend URL: {RAILWAY_API_URL}")
+    print(f"   Backend URL: {BACKEND_API_URL}")
     print(f"   Web-UI URL: {WEB_UI_BASE_URL}")
 else:
     print("⚠️  OAuth libraries not available - signing disabled")
 
 # Check that we have a backend URL configured
-if not RAILWAY_API_URL:
+if not BACKEND_API_URL:
     print("")
     print("=" * 70)
     print("🚨 FATAL ERROR: Backend URL not configured!")
@@ -267,7 +267,7 @@ if not RAILWAY_API_URL:
     print("The web UI requires the backend URL for OAuth and API calls.")
     print("")
     print("Set this environment variable:")
-    print("  RAILWAY_API_URL=https://your-backend.railway.app")
+    print("  BACKEND_API_URL=http://localhost:8000")
     print("=" * 70)
     sys.exit(1)
 
@@ -353,13 +353,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         
         # Content Security Policy - prevents XSS attacks
-        # Build CSP policy dynamically to include Railway URL
+        # Build CSP policy dynamically to include Backend URL
         csp_parts = [
             "default-src 'self'",
             "script-src 'self' 'unsafe-inline'",  # unsafe-inline for compatibility with UI frameworks
             "style-src 'self' 'unsafe-inline'",   # unsafe-inline needed for inline styles  
-            f"img-src 'self' data: {RAILWAY_API_URL}",  # Restrict to self, data URIs, and Railway
-            f"connect-src 'self' {RAILWAY_API_URL}",
+            f"img-src 'self' data: {BACKEND_API_URL}",  # Restrict to self, data URIs, and Backend
+            f"connect-src 'self' {BACKEND_API_URL}",
             "font-src 'self' data:",
             "object-src 'none'",
             "base-uri 'self'",
@@ -380,7 +380,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         
-        # Only add HSTS if running on HTTPS (Railway)
+        # Only add HSTS if running on HTTPS (Backend)
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         
@@ -400,17 +400,16 @@ if DEBUG_MODE:
     ])
     secure_log("Development mode: Added port 3000 to CORS", "info")
 
-# Allow Railway URL if running on Railway (backend API)
-if RAILWAY_API_URL and RAILWAY_API_URL != "https://your-railway-app.railway.app":
-    ALLOWED_ORIGINS.append(RAILWAY_API_URL)
+# Allow Backend URL for CORS
+if BACKEND_API_URL:
+    ALLOWED_ORIGINS.append(BACKEND_API_URL)
 
-# Add self URL if running on Railway (web-ui deployed URL)
-# Railway sets RAILWAY_PUBLIC_DOMAIN or PORT when deployed
-RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-if RAILWAY_PUBLIC_DOMAIN:
-    railway_self_url = f"https://{RAILWAY_PUBLIC_DOMAIN}"
-    ALLOWED_ORIGINS.append(railway_self_url)
-    secure_log(f"Added Railway self URL to CORS: {railway_self_url}", "info")
+# Add self URL if running with a public domain
+BACKEND_PUBLIC_DOMAIN = os.getenv("BACKEND_PUBLIC_DOMAIN")
+if BACKEND_PUBLIC_DOMAIN:
+    public_url = f"https://{BACKEND_PUBLIC_DOMAIN}"
+    ALLOWED_ORIGINS.append(public_url)
+    secure_log(f"Added public URL to CORS: {public_url}", "info")
 
 # Custom allowed origin from environment
 CUSTOM_ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN")
@@ -474,7 +473,7 @@ async def make_signed_request(
     json_data: dict = None,
 ) -> httpx.Response:
     """
-    Make a signed request to the Railway API using OAuth session.
+    Make a signed request to the Backend API using OAuth session.
 
     Requires valid OAuth session - no fallback to API key.
     """
@@ -491,7 +490,7 @@ async def make_signed_request(
         )
 
     # Build URL with params using httpx to ensure signing matches what's actually sent
-    base_url = f"{RAILWAY_API_URL.rstrip('/')}{path}"
+    base_url = f"{BACKEND_API_URL.rstrip('/')}{path}"
     
     body = b""
     if json_data:
@@ -553,7 +552,7 @@ class ProcessInboxRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Verify Railway API connection and log security status"""
+    """Verify Backend API connection and log security status"""
     # Log security configuration
     secure_log(f"Environment: {ENVIRONMENT}", "info")
     secure_log(f"Debug mode: {DEBUG_MODE}", "info")
@@ -563,14 +562,14 @@ async def startup_event():
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{RAILWAY_API_URL}/health")
+            response = await client.get(f"{BACKEND_API_URL}/health")
             if response.status_code == 200:
-                secure_log(f"Connected to Railway API", "info")
+                secure_log(f"Connected to Backend API", "info")
             else:
-                secure_log(f"Railway API returned status {response.status_code}", "warning")
+                secure_log(f"Backend API returned status {response.status_code}", "warning")
     except Exception as e:
-        secure_log(f"Could not connect to Railway API: {sanitize_error_message(e)}", "warning")
-        secure_log("Make sure RAILWAY_API_URL is set correctly in .env", "info")
+        secure_log(f"Could not connect to Backend API: {sanitize_error_message(e)}", "warning")
+        secure_log("Make sure BACKEND_API_URL is set correctly in .env", "info")
 
 
 # ============================================================================
@@ -623,7 +622,7 @@ async def oauth_login(request: Request):
         "redirect_uri": callback_uri,
         "state": state,  # Pass state to backend for pass-through
     })
-    backend_oauth_url = f"{RAILWAY_API_URL.rstrip('/')}/auth/oauth/init/web-ui?{params}"
+    backend_oauth_url = f"{BACKEND_API_URL.rstrip('/')}/auth/oauth/init/web-ui?{params}"
     
     secure_log(f"Redirecting to backend OAuth (state={state[:10]}...)", "info")
     
@@ -686,7 +685,7 @@ async def oauth_callback(
         
         # Perform handshake with backend using the JWT token
         result = await do_handshake_with_jwt(
-            backend_url=RAILWAY_API_URL,
+            backend_url=BACKEND_API_URL,
             jwt_token=token,
             public_key=public_key,
             client_type="web-ui",
@@ -772,7 +771,7 @@ async def auth_status(request: Request):
 
 
 # ============================================================================
-# API Endpoints - Semantic Search (Proxy to Railway)
+# API Endpoints - Semantic Search (Proxy to Backend)
 # ============================================================================
 
 @app.post("/api/search")
@@ -782,7 +781,7 @@ async def search_emails(
     _user: str = Depends(verify_credentials)
 ):
     """
-    Semantic search across emails (proxied to Railway API)
+    Semantic search across emails (proxied to Backend API)
     
     Supports:
     - keyword: Traditional text search
@@ -809,7 +808,7 @@ async def search_emails(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -858,7 +857,7 @@ async def simple_search(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
     except httpx.RequestError as e:
         raise HTTPException(
@@ -872,7 +871,7 @@ async def simple_search(
 
 
 # ============================================================================
-# API Endpoints - Cost Overview (New endpoint, adds to Railway API)
+# API Endpoints - Cost Overview (New endpoint, adds to Backend API)
 # ============================================================================
 
 @app.get("/api/costs/overview")
@@ -894,7 +893,7 @@ async def get_cost_overview(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -919,7 +918,7 @@ async def get_cost_summary(session = Depends(get_oauth_session), _user: str = De
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1042,12 +1041,12 @@ async def get_processing_status():
 
 
 # ============================================================================
-# API Endpoints - Stats (Proxy to Railway)
+# API Endpoints - Stats (Proxy to Backend)
 # ============================================================================
 
 @app.get("/api/stats")
 async def get_stats(session = Depends(get_oauth_session), _user: str = Depends(verify_credentials)):
-    """Get general statistics from Railway API (requires authentication)"""
+    """Get general statistics from Backend API (requires authentication)"""
     try:
         response = await make_signed_request(session, "GET", "/api/stats")
         
@@ -1061,7 +1060,7 @@ async def get_stats(session = Depends(get_oauth_session), _user: str = Depends(v
         else:
             raise HTTPException(
                 status_code=503,
-                detail=f"Railway API error ({response.status_code}): {response.text[:200]}"
+                detail=f"Backend API error ({response.status_code}): {response.text[:200]}"
             )
         
     except httpx.RequestError as e:
@@ -1076,7 +1075,7 @@ async def get_stats(session = Depends(get_oauth_session), _user: str = Depends(v
 
 
 # ============================================================================
-# API Endpoints - Emails (Proxy to Railway)
+# API Endpoints - Emails (Proxy to Backend)
 # ============================================================================
 
 @app.get("/api/emails")
@@ -1173,9 +1172,9 @@ async def get_emails(
             }
         except Exception as e:
             log_exception("Database query failed", e)
-            # Fall through to Railway API proxy
+            # Fall through to Backend API proxy
     
-    # Fallback to Railway API proxy
+    # Fallback to Backend API proxy
     try:
         params = {
             "page": page,
@@ -1201,7 +1200,7 @@ async def get_emails(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1228,7 +1227,7 @@ async def update_email_metadata(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Update email metadata (proxy to Railway API, requires authentication)"""
+    """Update email metadata (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(
             session, "PUT", f"/api/emails/{email_id}/metadata",
@@ -1240,7 +1239,7 @@ async def update_email_metadata(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1259,7 +1258,7 @@ async def delete_email(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Delete email from database (proxy to Railway API, requires authentication)"""
+    """Delete email from database (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "DELETE", f"/api/emails/{email_id}")
         
@@ -1268,7 +1267,7 @@ async def delete_email(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1281,7 +1280,7 @@ async def delete_email(
 
 
 # ============================================================================
-# IMAP Actions - Proxy to Railway API
+# IMAP Actions - Proxy to Backend API
 # ============================================================================
 
 @app.post("/api/emails/{email_id}/delete")
@@ -1290,7 +1289,7 @@ async def delete_email_to_trash(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Move email to trash (proxy to Railway API, requires authentication)"""
+    """Move email to trash (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "POST", f"/api/emails/{email_id}/delete")
         
@@ -1299,7 +1298,7 @@ async def delete_email_to_trash(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1317,7 +1316,7 @@ async def archive_email_action(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Archive email (proxy to Railway API, requires authentication)"""
+    """Archive email (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "POST", f"/api/emails/{email_id}/archive")
         
@@ -1326,7 +1325,7 @@ async def archive_email_action(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1344,7 +1343,7 @@ async def mark_email_as_spam(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Mark email as spam (proxy to Railway API, requires authentication)"""
+    """Mark email as spam (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "POST", f"/api/emails/{email_id}/mark-spam")
         
@@ -1353,7 +1352,7 @@ async def mark_email_as_spam(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1371,7 +1370,7 @@ async def mark_email_as_handled(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Mark email as handled (proxy to Railway API, requires authentication)"""
+    """Mark email as handled (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "POST", f"/api/emails/{email_id}/mark-handled")
         
@@ -1380,7 +1379,7 @@ async def mark_email_as_handled(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1398,7 +1397,7 @@ async def get_folder_history(
     session = Depends(get_oauth_session),
     _user: str = Depends(verify_credentials)
 ):
-    """Get email folder history (proxy to Railway API, requires authentication)"""
+    """Get email folder history (proxy to Backend API, requires authentication)"""
     try:
         response = await make_signed_request(session, "GET", f"/api/emails/{email_id}/folder-history")
         
@@ -1407,7 +1406,7 @@ async def get_folder_history(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -1463,7 +1462,7 @@ async def create_draft_reply(
                 detail="IMAP not configured. Set IMAP_HOST, IMAP_USERNAME, IMAP_PASSWORD in .env file to use draft creation."
             )
         
-        # Get email details from Railway API
+        # Get email details from Backend API
         response = await make_signed_request(session, "GET", f"/api/emails/{email_id}")
         if response.status_code != 200:
             raise HTTPException(status_code=404, detail="Email not found in database")
@@ -1581,7 +1580,7 @@ async def open_reply_in_mail(
         )
     
     try:
-        # Get email details from Railway API
+        # Get email details from Backend API
         response = await make_signed_request(session, "GET", f"/api/emails/{email_id}")
         if response.status_code != 200:
             raise HTTPException(status_code=404, detail="Email not found in database")
@@ -1799,9 +1798,9 @@ async def get_single_email(
             raise
         except Exception as e:
             log_exception("Database query for single email failed", e)
-            # Fall through to Railway API proxy
+            # Fall through to Backend API proxy
     
-    # Fallback to Railway API proxy
+    # Fallback to Backend API proxy
     try:
         response = await make_signed_request(session, "GET", f"/api/emails/{email_id}")
         
@@ -1818,7 +1817,7 @@ async def get_single_email(
         else:
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"Railway API error: {response.text}"
+                detail=f"Backend API error: {response.text}"
             )
         
     except httpx.RequestError as e:
@@ -2017,22 +2016,22 @@ async def move_email_to_account(email_id: str, request: MoveToAccountRequest):
 @app.get("/health")
 async def health_check():
     """
-    Health check endpoint - checks Railway API connectivity.
+    Health check endpoint - checks Backend API connectivity.
     
     Returns minimal info in production to avoid information leakage.
     """
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{RAILWAY_API_URL}/health", timeout=5.0)
+            response = await client.get(f"{BACKEND_API_URL}/health", timeout=5.0)
             
             if response.status_code == 200:
                 # In production, don't expose internal API details
                 if DEBUG_MODE:
-                    railway_health = response.json()
+                    backend_health = response.json()
                     return {
                         "status": "healthy",
                         "web_ui": "running",
-                        "railway_api": railway_health,
+                        "backend_api": backend_health,
                         "macos_features": ENABLE_MACOS_FEATURES
                     }
                 else:
@@ -2042,8 +2041,8 @@ async def health_check():
                     return {
                         "status": "degraded",
                         "web_ui": "running",
-                        "railway_api": "unavailable",
-                        "railway_status_code": response.status_code
+                        "backend_api": "unavailable",
+                        "backend_status_code": response.status_code
                     }
                 else:
                     return {"status": "degraded"}
@@ -2053,7 +2052,7 @@ async def health_check():
             return {
                 "status": "degraded",
                 "web_ui": "running",
-                "railway_api": "unreachable",
+                "backend_api": "unreachable",
                 "error": sanitize_error_message(e)
             }
         else:

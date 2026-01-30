@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Get database URL from environment
 DATABASE_URL = os.getenv('DATABASE_URL', '')
 
-# Convert postgres:// to postgresql:// if needed (Railway sometimes uses postgres://)
+# Convert postgres:// to postgresql:// if needed (some cloud providers use postgres://)
 if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 

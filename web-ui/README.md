@@ -1,11 +1,11 @@
 # mail-done Web UI
 
-A modern, local web interface for the mail-done email processing system. This lightweight web UI connects to your Railway API to provide:
+A modern, local web interface for the mail-done email processing system. This lightweight web UI connects to your backend API to provide:
 
-- 🔍 **Semantic Search** - Search emails using natural language
-- 💰 **Cost Overview** - Track OpenAI API usage and costs
-- ⚙️ **Inbox Processing** - Trigger email processing jobs
-- 📊 **Statistics** - View email database statistics
+- **Semantic Search** - Search emails using natural language
+- **Cost Overview** - Track LLM API usage and costs
+- **Inbox Processing** - Trigger email processing jobs
+- **Statistics** - View email database statistics
 
 ## Features
 
@@ -21,7 +21,7 @@ Example queries:
 - "meeting invites from last week"
 
 ### Cost Tracking
-Monitor your OpenAI API usage:
+Monitor your LLM API usage:
 - Daily, monthly, and total costs
 - Breakdown by model (GPT-4o, GPT-4o-mini, embeddings)
 - Breakdown by task (classification, embedding, search)
@@ -45,13 +45,12 @@ View your email database stats:
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Access to your Railway API (must be deployed and running)
-- Railway API key
+- Docker and Docker Compose (or Podman)
+- Backend API running (see main project deployment)
 
 ### Quick Start
 
-1. **Clone or navigate to the web-ui directory:**
+1. **Navigate to the web-ui directory:**
 
 ```bash
 cd mail-done/web-ui
@@ -60,30 +59,30 @@ cd mail-done/web-ui
 2. **Create `.env` file:**
 
 ```bash
-cp .env.example .env
+cp env-template .env
 ```
 
-3. **Edit `.env` with your Railway API details:**
+3. **Edit `.env` with your API details:**
 
 ```bash
-RAILWAY_API_URL=https://your-app.railway.app
-WEB_UI_PORT=8080
-```
+# Backend API URL (local or remote)
+BACKEND_API_URL=http://localhost:8000
 
-**Note:** No API keys needed - authentication uses signed requests via OAuth.
+# Web UI port
+WEB_UI_PORT=8080
+
+# Optional: API key if backend requires authentication
+# API_KEY=your-api-key
+```
 
 4. **Build and run with Docker Compose:**
 
 ```bash
-# Using the start script (recommended - auto-detects docker compose version)
+# Using the start script (recommended)
 ./start.sh
 
-# Or manually:
-# For newer Docker Desktop (Docker Compose V2)
+# Or manually
 docker compose up -d
-
-# For older docker-compose (V1)
-docker-compose up -d
 ```
 
 5. **Access the web interface:**
@@ -110,17 +109,21 @@ The server will start on http://localhost:8080
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `RAILWAY_API_URL` | URL of your Railway API | Yes | - |
+| `BACKEND_API_URL` | URL of your backend API | Yes | - |
 | `WEB_UI_PORT` | Port for web server | No | 8080 |
+| `API_KEY` | API key for backend auth | No | - |
 
-### Getting Your Railway API Details
+### Connecting to Remote Backend
 
-1. **Railway API URL**:
-   - Go to your Railway project dashboard
-   - Find your deployed service
-   - Copy the public URL (e.g., `https://your-app.railway.app`)
+For a remote backend (e.g., on a Raspberry Pi or server):
 
-**Note:** No API keys needed - authentication uses signed requests via OAuth.
+```bash
+# Direct connection
+BACKEND_API_URL=http://your-server:8000
+
+# Via Tailscale
+BACKEND_API_URL=http://mail-done.your-tailnet.ts.net:8000
+```
 
 ## Usage
 
@@ -151,8 +154,6 @@ View:
 - Daily cost trends
 - Monthly and yearly projections
 
-**Note**: Cost tracking requires the cost endpoints to be deployed on Railway. If not available, the UI will show basic stats only.
-
 ### Process Inbox
 
 1. Navigate to the **Process Inbox** tab
@@ -164,8 +165,6 @@ View:
    - **Generate embeddings**: Generate vectors for semantic search
 3. Click **Start Processing**
 4. Monitor real-time status updates
-
-The processing runs in the background on your local machine and connects to your IMAP server.
 
 ### Statistics
 
@@ -181,15 +180,15 @@ View:
 
 ## Architecture
 
-This web UI is a lightweight proxy to your Railway API:
+The web UI is a lightweight proxy to your backend API:
 
 ```
-┌─────────────┐      HTTP      ┌─────────────┐      Database      ┌──────────────┐
-│   Browser   │ ◄────────────► │   Web UI    │ ◄────────────────► │   Railway    │
-│  (You)      │                │  (Docker)   │                    │     API      │
-└─────────────┘                └─────────────┘                    └──────────────┘
+┌─────────────┐      HTTP      ┌─────────────┐      HTTP      ┌──────────────┐
+│   Browser   │ ◄────────────► │   Web UI    │ ◄────────────► │  Backend API │
+│  (You)      │                │  (Docker)   │                │              │
+└─────────────┘                └─────────────┘                └──────────────┘
                                       │
-                                      │ Triggers local
+                                      │ Triggers
                                       ▼
                               ┌─────────────┐
                               │ process_    │
@@ -199,9 +198,8 @@ This web UI is a lightweight proxy to your Railway API:
 
 **Benefits:**
 - No duplicate database connections
-- Leverages existing Railway API
 - Lightweight and fast
-- Can run on same machine as email processor
+- Can run on same machine as backend or separately
 
 ## Docker Commands
 
@@ -211,41 +209,26 @@ This web UI is a lightweight proxy to your Railway API:
 # Recommended - auto-detects docker compose version
 ./start.sh
 
-# Or manually with Docker Compose V2 (newer)
+# Or manually
 docker compose up -d
-
-# Or with docker-compose V1 (older)
-docker-compose up -d
 ```
 
 ### View logs
 
 ```bash
-# Docker Compose V2
 docker compose logs -f
-
-# docker-compose V1
-docker-compose logs -f
 ```
 
 ### Stop the service
 
 ```bash
-# Docker Compose V2
 docker compose down
-
-# docker-compose V1
-docker-compose down
 ```
 
 ### Rebuild after changes
 
 ```bash
-# Docker Compose V2
 docker compose up -d --build
-
-# docker-compose V1
-docker-compose up -d --build
 ```
 
 ### Check health status
@@ -256,18 +239,18 @@ curl http://localhost:8080/health
 
 ## Troubleshooting
 
-### Cannot connect to Railway API
+### Cannot connect to backend API
 
-**Symptoms**: Red connection status, "Cannot connect to Railway API"
+**Symptoms**: Red connection status, "Cannot connect to API"
 
 **Solutions**:
-1. Verify `RAILWAY_API_URL` in `.env` is correct
-2. Ensure Railway API is running and accessible
-3. Check Railway API key is set correctly
-4. Test Railway API directly:
+1. Verify `BACKEND_API_URL` in `.env` is correct
+2. Ensure backend API is running and accessible
+3. Test backend directly:
    ```bash
-   curl https://your-app.railway.app/health
+   curl http://localhost:8000/health
    ```
+4. Check network connectivity (firewall, VPN, etc.)
 
 ### Search returns no results
 
@@ -279,25 +262,23 @@ curl http://localhost:8080/health
 2. Search query too specific
    - Try broader terms
    - Use hybrid mode instead of semantic-only
-3. API key not configured
-   - Check Railway API key in `.env`
 
 ### Processing fails to start
 
 **Solutions**:
 1. Ensure `process_inbox.py` is accessible
 2. Check that Poetry environment is set up correctly
-3. Verify IMAP credentials in email-processor `.env`
+3. Verify IMAP credentials in `.env`
 4. Review logs:
    ```bash
-   docker-compose logs web-ui
+   docker compose logs web-ui
    ```
 
 ### Cost tracking shows "not available"
 
-**Explanation**: Cost tracking endpoints need to be added to Railway API.
+**Explanation**: Cost tracking requires the cost endpoints in the backend.
 
-**Solution**: The web UI is ready, but you need to deploy the cost tracking endpoints from `email-processor/backend/core/database/cost_tracking.py` to Railway.
+**Solution**: Ensure the backend has cost tracking enabled.
 
 ## API Endpoints
 
@@ -314,7 +295,7 @@ The web UI exposes these endpoints:
 - `POST /api/process/trigger` - Trigger inbox processing
 - `GET /api/process/status` - Get processing status
 
-All endpoints proxy to Railway API except for process triggering.
+All endpoints proxy to the backend API except for process triggering.
 
 ## Security Notes
 
@@ -341,17 +322,18 @@ web-ui/
 │   ├── index.html      # Main UI
 │   ├── style.css       # Styling
 │   └── app.js          # Frontend logic
+├── shared_auth/        # Authentication utilities
 ├── Dockerfile          # Container definition
 ├── docker-compose.yml  # Docker Compose config
 ├── requirements.txt    # Python dependencies
-├── .env.example        # Environment template
-└── README.md          # This file
+├── env-template        # Environment template
+└── README.md           # This file
 ```
 
 ### Adding New Features
 
 1. **New API endpoint**: Add to `app.py`
-2. **New UI tab**: 
+2. **New UI tab**:
    - Add tab button in `index.html`
    - Add tab pane in `index.html`
    - Add JavaScript handlers in `app.js`
@@ -361,7 +343,7 @@ web-ui/
 
 **Backend:**
 - FastAPI (Python web framework)
-- httpx (HTTP client for Railway API)
+- httpx (HTTP client for backend API)
 - uvicorn (ASGI server)
 
 **Frontend:**
@@ -369,35 +351,9 @@ web-ui/
 - Modern CSS with CSS Grid and Flexbox
 - Responsive design
 
-## Roadmap
-
-Future enhancements:
-
-- [ ] Add dedicated cost endpoints to Railway API
-- [ ] Real-time processing progress with WebSockets
-- [ ] Email preview modal with full content
-- [ ] Export search results to CSV
-- [ ] Saved searches and filters
-- [ ] Dark mode toggle
-- [ ] Email analytics dashboard
-
-## License
-
-Part of the mail-done project. See main project for license details.
-
-## Support
-
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review Railway API logs
-3. Check Docker logs: `docker-compose logs`
-4. Ensure all environment variables are set correctly
-
 ## Related Documentation
 
 - [mail-done Main Project](../README.md)
-- [Email Processor Documentation](../email-processor/README.md)
-- [Railway Deployment Guide](../email-processor/RAILWAY_DEPLOYMENT.md)
-- [Search Documentation](../email-processor/ADVANCED_SEARCH_COMPLETE.md)
-- [Cost Tracking](../email-processor/COST_TRACKING.md)
-
+- [Deployment Guide](../docs/DEPLOYMENT.md)
+- [API Documentation](../docs/API.md)
+- [Database Schema](../docs/DATABASE.md)

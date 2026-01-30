@@ -1,19 +1,24 @@
 # =============================================================================
-# Mail-Done Web UI Configuration (ZERO-KNOWLEDGE)
+# Mail-Done Web UI Configuration
 # =============================================================================
 # Copy this file to .env and fill in your values
 #
-# SECURITY: This Web-UI is ZERO-KNOWLEDGE:
+# SECURITY: This Web-UI uses OAuth for authentication:
 #   - Uses OAuth for user authentication (no passwords stored)
 #   - Uses signed requests to backend (no API keys needed)
 #   - Has NO database credentials
-#   - Only proxies requests to Railway backend via signed auth
+#   - Only proxies requests to backend via signed auth
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Railway API Configuration (REQUIRED)
+# Backend API Configuration (REQUIRED)
 # -----------------------------------------------------------------------------
-RAILWAY_API_URL=https://your-railway-app.railway.app
+# URL of your mail-done backend API
+# Examples:
+#   - Local: http://localhost:8000
+#   - Remote server: http://your-server:8000
+#   - Via Tailscale: http://mail-done.your-tailnet.ts.net:8000
+BACKEND_API_URL=http://localhost:8000
 
 # -----------------------------------------------------------------------------
 # Authentication (REQUIRED)
@@ -24,7 +29,7 @@ WEB_UI_BASE_URL=http://localhost:8080
 
 # NOTE: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are NOT needed here!
 # The backend has its own credentials configured for each client type.
-# See: email-processor/config/oauth_policies.yaml
+# See: config/oauth_policies.yaml
 
 # -----------------------------------------------------------------------------
 # Server Configuration
@@ -58,7 +63,7 @@ RATE_LIMIT_LOCKOUT_SECONDS=300
 # macOS Integration (only for local macOS use)
 # -----------------------------------------------------------------------------
 # Enable Mail.app integration features (only works on macOS)
-# Set to "false" when running in Docker or on Railway
+# Set to "false" when running in Docker or on a server
 ENABLE_MACOS_FEATURES=true
 
 # IMAP credentials for draft creation (optional, for Mail.app integration)

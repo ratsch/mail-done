@@ -22,12 +22,12 @@ echo ""
 if [ ! -f ".env" ]; then
     echo "⚠️  .env file not found!"
     echo "   Creating from env-template..."
-    
+
     if [ -f "env-template" ]; then
         cp env-template .env
         echo "   ✅ Created .env file"
         echo ""
-        echo "   ⚠️  IMPORTANT: Edit .env and set your Railway API URL and API Key!"
+        echo "   ⚠️  IMPORTANT: Edit .env and set your BACKEND_API_URL!"
         echo "   Then run this script again."
         echo ""
         exit 1
@@ -37,16 +37,11 @@ if [ ! -f ".env" ]; then
     fi
 fi
 
-# Check if Railway API URL is set
-if grep -q "your-railway-app.railway.app" .env; then
-    echo "⚠️  WARNING: Railway API URL not configured!"
-    echo "   Edit .env and set RAILWAY_API_URL to your Railway app URL"
+# Check if Backend API URL is set to default
+if grep -q "BACKEND_API_URL=http://localhost:8000" .env; then
+    echo "ℹ️  Using default BACKEND_API_URL: http://localhost:8000"
+    echo "   Edit .env to change the backend URL if needed."
     echo ""
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
 fi
 
 echo "📦 Building Docker image..."
@@ -75,4 +70,3 @@ echo ""
 echo "   View logs: $DOCKER_COMPOSE logs -f"
 echo "   Stop: $DOCKER_COMPOSE down"
 echo ""
-

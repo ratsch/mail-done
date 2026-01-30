@@ -331,8 +331,8 @@ class EmbeddingGenerator:
         
         Args:
             query: Search query text
-            max_retries: Maximum retry attempts for API failures (default: 5 for Railway)
-            timeout: Timeout per request in seconds (default: 60 for Railway stability)
+            max_retries: Maximum retry attempts for API failures (default: 5)
+            timeout: Timeout per request in seconds (default: 60 for stability)
         
         Returns:
             Embedding vector (or zero vector if all retries fail)

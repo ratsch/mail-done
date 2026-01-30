@@ -6,7 +6,7 @@ Tracks all OpenAI API usage in PostgreSQL with:
 - Daily aggregation (total cost per day)
 - Model breakdown (GPT-4o vs GPT-4o-mini vs embeddings)
 - Task breakdown (classification vs embedding vs search)
-- Source tracking (CLI vs Railway API)
+- Source tracking (CLI vs API)
 """
 import logging
 from datetime import datetime, date, timezone

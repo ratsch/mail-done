@@ -171,16 +171,16 @@ async function checkConnection() {
         const data = await response.json();
         
         if (data.status === 'healthy') {
-            statusEl.textContent = '✅ Connected to Railway API';
+            statusEl.textContent = '✅ Connected to Backend API';
             statusEl.classList.add('connected');
             statusEl.classList.remove('disconnected');
         } else {
-            statusEl.textContent = '⚠️ Railway API degraded';
+            statusEl.textContent = '⚠️ Backend API degraded';
             statusEl.classList.add('disconnected');
             statusEl.classList.remove('connected');
         }
     } catch (error) {
-        statusEl.textContent = '❌ Cannot connect to Railway API';
+        statusEl.textContent = '❌ Cannot connect to Backend API';
         statusEl.classList.add('disconnected');
         statusEl.classList.remove('connected');
     }
@@ -565,7 +565,7 @@ function displaySearchResults(data, container) {
     const sortedResults = [...data.results].sort((a, b) => (b.score || 0) - (a.score || 0));
     
     const resultsHtml = sortedResults.map((result, index) => {
-        // Railway API returns nested structure: { email: {...}, score: X }
+        // Backend API returns nested structure: { email: {...}, score: X }
         const email = result.email || result;
         const score = result.score || 0;
         
@@ -1222,7 +1222,7 @@ async function loadCosts() {
         } else {
             const errorText = await overviewResponse.text();
             console.error('Cost overview error:', errorText);
-            detailsEl.innerHTML = `<div class="error-message">Cost overview not available (${overviewResponse.status}). Railway may still be deploying the cost endpoints.</div>`;
+            detailsEl.innerHTML = `<div class="error-message">Cost overview not available (${overviewResponse.status}). Cost tracking endpoints may not be enabled.</div>`;
         }
         
     } catch (error) {
@@ -2424,10 +2424,9 @@ Best regards,`;
         if (errorMessage.includes('requires macOS') || errorMessage.includes('running on Linux')) {
             helpText = '\n\n💡 This feature requires running the web UI locally on your Mac.\n\n' +
                       'To use this feature:\n' +
-                      '1. Stop using the Railway server for the web UI\n' +
-                      '2. Run locally: cd web-ui && python3.11 app.py\n' +
-                      '3. Access: http://localhost:8080\n\n' +
-                      'All other features (search, browse, etc.) work fine on Railway!';
+                      '1. Run the web UI locally: cd web-ui && python3.11 app.py\n' +
+                      '2. Access: http://localhost:8080\n\n' +
+                      'All other features (search, browse, etc.) work on any server!';
         } else if (errorMessage.includes('not found in Mail.app') || errorMessage.includes('not be downloaded yet')) {
             helpText = '\n\n💡 The email isn\'t in Mail.app yet.\n\n' +
                       'Try this:\n' +

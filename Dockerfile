@@ -1,7 +1,7 @@
 # Use Python 3.11 as required by project
 FROM python:3.11-slim
 
-# Force cache bust for Railway deployment
+# Force cache bust for deployment
 ARG BUILDTIME=unknown
 RUN echo "Build time: $BUILDTIME"
 
