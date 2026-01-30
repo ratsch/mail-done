@@ -16,6 +16,9 @@
 #   # View logs
 #   podman-compose -f deploy/docker-compose.pi.yml logs -f api
 
+# Disable default network (required for host networking with podman-compose)
+networks: {}
+
 services:
   # ==========================================================================
   # PostgreSQL with pgvector (runs on host network)
@@ -25,6 +28,7 @@ services:
     container_name: mail-done-db
     restart: unless-stopped
     network_mode: host
+    networks: []
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -56,6 +60,7 @@ services:
     container_name: mail-done-api
     restart: unless-stopped
     network_mode: host
+    networks: []
     depends_on:
       db:
         condition: service_healthy
