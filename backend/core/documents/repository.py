@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy import select, update, and_, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from backend.core.documents.models import (
@@ -101,6 +102,10 @@ class DocumentRepository:
         """
         Get existing document or create new one.
 
+        Handles race conditions where multiple processes try to create
+        the same document simultaneously by catching IntegrityError
+        and fetching the existing document.
+
         Args:
             checksum: SHA-256 checksum
             file_size: File size in bytes
@@ -116,13 +121,24 @@ class DocumentRepository:
             existing.last_seen_at = datetime.utcnow()
             return existing, False
 
-        document = await self.create_document(
-            checksum=checksum,
-            file_size=file_size,
-            mime_type=mime_type,
-            original_filename=original_filename,
-        )
-        return document, True
+        try:
+            document = await self.create_document(
+                checksum=checksum,
+                file_size=file_size,
+                mime_type=mime_type,
+                original_filename=original_filename,
+            )
+            return document, True
+        except IntegrityError:
+            # Race condition: another process created the document
+            # Roll back the failed insert and fetch the existing document
+            self.db.rollback()
+            existing = await self.get_by_checksum(checksum)
+            if existing:
+                existing.last_seen_at = datetime.utcnow()
+                return existing, False
+            # This shouldn't happen, but re-raise if it does
+            raise
 
     async def update_extraction(
         self,

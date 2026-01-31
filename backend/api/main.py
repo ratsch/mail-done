@@ -12,7 +12,7 @@ import os
 import uuid
 
 from backend.api.auth import verify_api_key
-from backend.api.routes import emails, stats, tracking, replies, search, applemail, costs, debug, attachments, imap
+from backend.api.routes import emails, stats, tracking, replies, search, applemail, costs, debug, attachments, imap, documents
 from backend.api.routes import review_auth, review_applications, review_admin, review_notifications, review_stats, collections
 from backend.api.routes import oauth_handshake
 from backend.api.review_middleware import RateLimitMiddleware, AuditLogMiddleware, start_rate_limit_cleanup_thread
@@ -232,6 +232,7 @@ app.include_router(costs.router)  # Cost tracking
 app.include_router(debug.router)  # Debug endpoints
 app.include_router(attachments.router)  # Attachment downloads
 app.include_router(imap.router)  # Direct IMAP access
+app.include_router(documents.router)  # Document indexing (Phase 1)
 
 # Signed auth endpoints (OAuth handshake) - MUST be before review_auth for /auth/me priority
 # The /auth/me endpoint in oauth_handshake now handles both signed auth and JWT Bearer
