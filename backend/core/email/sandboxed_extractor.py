@@ -371,6 +371,31 @@ class SandboxedExtractor:
         """Extract text from iCalendar in sandbox."""
         return await self._run_extraction('ics', ics_bytes)
 
+    def _decode_text(self, content: bytes) -> Optional[str]:
+        """
+        Decode bytes to string, trying common encodings.
+
+        Args:
+            content: Raw bytes
+
+        Returns:
+            Decoded string or None if decoding fails
+        """
+        # Try common encodings in order of likelihood
+        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+
+        for encoding in encodings:
+            try:
+                return content.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        # Last resort: decode with replacement characters
+        try:
+            return content.decode('utf-8', errors='replace')
+        except Exception:
+            return None
+
     async def extract_text(
         self,
         content: bytes,
@@ -388,6 +413,13 @@ class SandboxedExtractor:
         Returns:
             Extracted text or None if extraction fails/unsupported
         """
+        # Plain text types - just decode directly
+        plain_text_mimes = {
+            'text/plain', 'text/markdown', 'text/x-markdown',
+        }
+        if content_type in plain_text_mimes:
+            return self._decode_text(content)
+
         # Map MIME types to extraction methods
         mime_to_method = {
             'application/pdf': self.extract_pdf,
@@ -408,6 +440,11 @@ class SandboxedExtractor:
         # Fallback to extension if MIME type not recognized
         if not extract_method and filename:
             ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+            # Plain text extensions
+            if ext in ('txt', 'md', 'markdown', 'text'):
+                return self._decode_text(content)
+
             ext_to_method = {
                 'pdf': self.extract_pdf,
                 'docx': self.extract_docx,
