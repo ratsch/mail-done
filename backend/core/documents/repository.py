@@ -351,13 +351,67 @@ class DocumentRepository:
 
     async def mark_origin_deleted(
         self,
+        origin_id: Optional[UUID] = None,
+        origin_type: Optional[str] = None,
+        origin_host: Optional[str] = None,
+        origin_path: Optional[str] = None,
+        origin_filename: Optional[str] = None,
+    ) -> bool:
+        """
+        Mark an origin as deleted (soft delete).
+
+        Can be called with origin_id, or with origin attributes.
+
+        Args:
+            origin_id: Origin UUID (if known)
+            origin_type: Type of origin ('folder', 'email_attachment', etc.)
+            origin_host: Host name
+            origin_path: Path to file directory
+            origin_filename: Filename
+
+        Returns:
+            True if origin was found and marked deleted
+        """
+        if origin_id:
+            stmt = (
+                update(DocumentOrigin)
+                .where(DocumentOrigin.id == origin_id)
+                .values(is_deleted=True, deleted_at=datetime.utcnow())
+            )
+        else:
+            # Find by attributes
+            conditions = []
+            if origin_type:
+                conditions.append(DocumentOrigin.origin_type == origin_type)
+            if origin_host:
+                conditions.append(DocumentOrigin.origin_host == origin_host)
+            if origin_path:
+                conditions.append(DocumentOrigin.origin_path == origin_path)
+            if origin_filename:
+                conditions.append(DocumentOrigin.origin_filename == origin_filename)
+
+            if not conditions:
+                return False
+
+            stmt = (
+                update(DocumentOrigin)
+                .where(and_(*conditions))
+                .where(DocumentOrigin.is_deleted == False)
+                .values(is_deleted=True, deleted_at=datetime.utcnow())
+            )
+
+        result = self.db.execute(stmt)
+        return result.rowcount > 0
+
+    async def update_origin_verified(
+        self,
         origin_id: UUID,
     ) -> bool:
-        """Mark an origin as deleted (soft delete)."""
+        """Update last_verified_at timestamp for an origin."""
         stmt = (
             update(DocumentOrigin)
             .where(DocumentOrigin.id == origin_id)
-            .values(is_deleted=True, deleted_at=datetime.utcnow())
+            .values(last_verified_at=datetime.utcnow())
         )
         result = self.db.execute(stmt)
         return result.rowcount > 0

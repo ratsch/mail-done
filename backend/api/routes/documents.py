@@ -275,6 +275,87 @@ async def get_document_text(
     }
 
 
-# Note: Document content retrieval endpoint (getting the actual binary file)
-# will be implemented in Phase 2 when folder scanning and retrieval are added.
-# That requires the host configuration and retrieval service.
+@router.get("/{document_id}/content", dependencies=[Depends(verify_api_key)])
+async def get_document_content(
+    document_id: UUID,
+    origin_index: int = Query(0, ge=0, description="Origin index to retrieve from (0=primary)"),
+    fallback: bool = Query(True, description="Try other origins if first fails"),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve the original document binary content.
+
+    Fetches the file from its stored origin (filesystem, email attachment, etc.).
+    If the primary origin is unavailable, can fall back to secondary origins.
+
+    **Response:**
+    - Returns binary file with appropriate Content-Type
+    - Content-Disposition header for download with original filename
+    """
+    from backend.core.documents.retrieval import DocumentRetrievalService, RetrievalError
+
+    repo = DocumentRepository(db)
+    document = await repo.get_by_id(document_id)
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    retrieval = DocumentRetrievalService(repo)
+
+    try:
+        content = await retrieval.get_content(
+            document=document,
+            origin_index=origin_index,
+            fallback=fallback,
+        )
+    except RetrievalError as e:
+        logger.warning(f"Failed to retrieve document {document_id}: {e}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document content not accessible: {str(e)}"
+        )
+
+    # Get content type
+    content_type = retrieval.get_content_type(document)
+
+    # Build filename for Content-Disposition
+    filename = document.original_filename or f"document_{document_id}"
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(content)),
+        }
+    )
+
+
+@router.get("/{document_id}/verify-origins", dependencies=[Depends(verify_api_key)])
+async def verify_document_origins(
+    document_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Verify accessibility of all origins for a document.
+
+    Checks each origin to see if it's still accessible and updates
+    the last_verified_at timestamp for accessible origins.
+
+    Returns a map of origin_id to accessibility status.
+    """
+    from backend.core.documents.retrieval import DocumentRetrievalService
+
+    repo = DocumentRepository(db)
+    document = await repo.get_by_id(document_id)
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    retrieval = DocumentRetrievalService(repo)
+    results = await retrieval.verify_all_origins(document)
+
+    return {
+        "document_id": str(document_id),
+        "origins": results,
+    }

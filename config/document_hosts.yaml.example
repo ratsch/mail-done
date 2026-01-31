@@ -1,0 +1,97 @@
+# Document Hosts Configuration
+# ============================
+#
+# This file defines hosts where documents can be indexed from.
+# Copy to document_hosts.yaml and configure as needed.
+#
+# Supported host types:
+# - local: Local filesystem access
+# - network_mount: NFS/SMB mounted shares
+# - ssh: Remote access via SSH/SCP
+
+hosts:
+  # Local filesystem (always available)
+  - name: localhost
+    type: local
+    mount_point: /
+    read_only: true
+    max_file_size_mb: 100
+    allowed_extensions:
+      - pdf
+      - doc
+      - docx
+      - xls
+      - xlsx
+      - ppt
+      - pptx
+      - txt
+      - rtf
+      - odt
+      - ods
+      - odp
+      - csv
+      - md
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - tiff
+      - bmp
+      - eml
+      - msg
+    exclude_patterns:
+      - "*.tmp"
+      - "*.temp"
+      - "*.bak"
+      - "*.swp"
+      - "*~"
+      - ".DS_Store"
+      - "Thumbs.db"
+      - ".git/*"
+      - ".svn/*"
+      - "__pycache__/*"
+      - "*.pyc"
+      - "node_modules/*"
+      - ".Trash/*"
+      - "$RECYCLE.BIN/*"
+
+  # Example: Network-attached storage (NAS)
+  # - name: nas
+  #   type: network_mount
+  #   mount_point: /mnt/nas
+  #   read_only: true
+  #   max_file_size_mb: 500
+  #   # Uses default extensions and exclude patterns
+
+  # Example: Remote server via SSH
+  # - name: remote-server
+  #   type: ssh
+  #   ssh_host: server.example.com
+  #   ssh_user: username
+  #   ssh_port: 22
+  #   ssh_key_path: ~/.ssh/id_rsa
+  #   read_only: true
+  #   max_file_size_mb: 100
+  #   # SSH hosts always retrieve files via SCP to local temp before processing
+
+  # Example: Document archive server
+  # - name: archive
+  #   type: ssh
+  #   ssh_host: archive.internal
+  #   ssh_user: docbot
+  #   ssh_port: 22
+  #   ssh_key_path: /etc/docbot/archive_key
+  #   read_only: true
+  #   max_file_size_mb: 200
+  #   allowed_extensions:
+  #     - pdf
+  #     - tiff
+  #   # Only index PDFs and TIFFs from archive
+
+# Notes:
+# ------
+# 1. The 'name' field must be unique across all hosts
+# 2. For SSH hosts, the key file must be readable by the service user
+# 3. For network_mount hosts, ensure the mount is accessible from the service
+# 4. Use read_only: true unless you have a specific need to modify files
+# 5. Set max_file_size_mb appropriately to avoid memory issues
