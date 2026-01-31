@@ -18,6 +18,10 @@ from backend.core.database.models import Email, EmailMetadata
 
 logger = logging.getLogger(__name__)
 
+# Attachment text limits for embedding
+MAX_ATTACHMENT_TEXT_CHARS = 5000  # Per attachment
+MAX_ATTACHMENTS_FOR_EMBEDDING = 5  # Maximum attachments to include
+
 
 class EmbeddingGenerator:
     """Generate and manage vector embeddings for emails."""
@@ -269,35 +273,35 @@ class EmbeddingGenerator:
     ) -> str:
         """
         Prepare email text for embedding.
-        
-        Combines subject, sender, category, and body for comprehensive representation.
-        Weighted to prioritize subject and key metadata.
-        
+
+        Combines subject, sender, category, body, and attachment text for
+        comprehensive representation. Weighted to prioritize subject and key metadata.
+
         Args:
             email: Email to prepare
             metadata: Email metadata
-        
+
         Returns:
             Prepared text string
         """
         parts = []
-        
+
         # Subject (weighted 2x by repeating)
         if email.subject:
             parts.append(f"Subject: {email.subject}")
             parts.append(email.subject)  # Repeat for emphasis
-        
+
         # Category (if available)
         if metadata and metadata.ai_category:
             parts.append(f"Category: {metadata.ai_category}")
-        
+
         # Sender name/domain (for context)
         if email.from_name:
             parts.append(f"From: {email.from_name}")
         elif email.from_address:
             sender_name = email.from_address.split('@')[0]
             parts.append(f"From: {sender_name}")
-        
+
         # Body (truncate to ~2000 chars to stay within token limits)
         # OpenAI embedding models have 8191 token limit for text-embedding-3-*
         # Approximate: 1 token ≈ 4 chars, so 2000 chars ≈ 500 tokens
@@ -311,19 +315,66 @@ class EmbeddingGenerator:
             if len(body) > max_body_length:
                 body = body[:max_body_length] + "..."
             parts.append(body)
-        
+
+        # Attachment text (Phase 0: include extracted text from attachments)
+        # This enables semantic search over attachment content
+        attachment_texts = self._extract_attachment_texts(email)
+        if attachment_texts:
+            parts.extend(attachment_texts)
+
         # AI summary (if available, very valuable for embedding)
         if metadata and metadata.ai_summary:
             parts.append(f"Summary: {metadata.ai_summary}")
-        
+
         # Combine all parts
         text = "\n".join(parts)
-        
+
         # Final length check (OpenAI limit is ~8000 tokens)
         if len(text) > 6000:  # Conservative limit
             text = text[:6000] + "..."
-        
+
         return text
+
+    def _extract_attachment_texts(self, email: Email) -> List[str]:
+        """
+        Extract text content from email attachments.
+
+        Reads the attachment_info JSON column which contains extracted_text
+        for each attachment that was successfully processed.
+
+        Args:
+            email: Email with attachment_info
+
+        Returns:
+            List of formatted attachment text strings
+        """
+        attachment_texts = []
+
+        if not email.attachment_info:
+            return attachment_texts
+
+        # attachment_info is a JSON list of AttachmentInfo dicts
+        attachments = email.attachment_info
+        if not isinstance(attachments, list):
+            return attachment_texts
+
+        for i, att in enumerate(attachments[:MAX_ATTACHMENTS_FOR_EMBEDDING]):
+            if not isinstance(att, dict):
+                continue
+
+            extracted_text = att.get('extracted_text')
+            if not extracted_text or not extracted_text.strip():
+                continue
+
+            filename = att.get('filename', f'Attachment {i+1}')
+
+            # Truncate long attachment text
+            if len(extracted_text) > MAX_ATTACHMENT_TEXT_CHARS:
+                extracted_text = extracted_text[:MAX_ATTACHMENT_TEXT_CHARS] + "..."
+
+            attachment_texts.append(f"[Attachment: {filename}]\n{extracted_text}")
+
+        return attachment_texts
     
     def generate_query_embedding(self, query: str, max_retries: int = 5, timeout: int = 60) -> List[float]:
         """
