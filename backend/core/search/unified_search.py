@@ -12,7 +12,7 @@ Key Features:
 """
 
 import logging
-from typing import List, Optional, Tuple, Union, Literal
+from typing import List, Optional, Tuple, Union, Literal, Dict
 from uuid import UUID
 from datetime import datetime, date
 from dataclasses import dataclass
@@ -35,11 +35,22 @@ class ResultType(str, Enum):
 
 
 @dataclass
+class MatchLocation:
+    """Location of a match within a document."""
+    page_number: Optional[int]  # Page number (1-indexed) or sheet index
+    chunk_index: int  # Chunk within page (0 = first/only)
+    similarity: float
+    chunk_text: Optional[str] = None  # Snippet of matching text
+
+
+@dataclass
 class UnifiedSearchResult:
     """A single unified search result."""
     result_type: ResultType
     item: Union[Email, Document]
-    similarity: float
+    similarity: float  # Best match similarity
+    # For documents with multiple embeddings, track all matches
+    matches: Optional[List[MatchLocation]] = None
 
     # Convenience properties for sorting
     @property
@@ -49,6 +60,18 @@ class UnifiedSearchResult:
             return self.item.date
         else:
             return self.item.document_date
+
+    @property
+    def best_page(self) -> Optional[int]:
+        """Get the page number of the best match."""
+        if self.matches:
+            return self.matches[0].page_number
+        return None
+
+    @property
+    def match_count(self) -> int:
+        """Number of matching pages/chunks."""
+        return len(self.matches) if self.matches else 1
 
 
 class UnifiedSearchService:
@@ -330,9 +353,10 @@ class UnifiedSearchService:
 
         where_clause = " AND ".join(filter_conditions)
 
+        # Include page_number and chunk_index for match location tracking
         base_sql = f"""
             WITH filtered AS (
-                SELECT emb.document_id, emb.embedding
+                SELECT emb.document_id, emb.page_number, emb.chunk_index, emb.embedding
                 FROM document_embeddings emb
                 JOIN documents d ON emb.document_id = d.id
                 WHERE {where_clause}
@@ -340,12 +364,14 @@ class UnifiedSearchService:
             scored AS (
                 SELECT
                     document_id,
+                    page_number,
+                    chunk_index,
                     1 - (embedding <=> cast(:query_vector as vector)) as similarity
                 FROM filtered
                 ORDER BY embedding <=> cast(:query_vector as vector)
                 LIMIT :candidate_limit
             )
-            SELECT document_id, similarity
+            SELECT document_id, page_number, chunk_index, similarity
             FROM scored
             WHERE similarity >= :threshold
             ORDER BY similarity DESC
@@ -359,24 +385,43 @@ class UnifiedSearchService:
             if not rows:
                 return []
 
+            # Group matches by document_id
+            doc_matches: Dict[UUID, List[MatchLocation]] = {}
+            for row in rows:
+                similarity = float(row.similarity)
+                if similarity != similarity or not (0 <= similarity <= 1):  # Filter NaN
+                    continue
+
+                doc_id = row.document_id
+                match = MatchLocation(
+                    page_number=row.page_number,
+                    chunk_index=row.chunk_index,
+                    similarity=similarity,
+                )
+
+                if doc_id not in doc_matches:
+                    doc_matches[doc_id] = []
+                doc_matches[doc_id].append(match)
+
             # Fetch documents
-            doc_ids = [row.document_id for row in rows]
             docs_map = {
                 doc.id: doc
-                for doc in self.db.query(Document).filter(Document.id.in_(doc_ids)).all()
+                for doc in self.db.query(Document).filter(Document.id.in_(doc_matches.keys())).all()
             }
 
+            # Build results with grouped matches
             results = []
-            for row in rows:
-                doc = docs_map.get(row.document_id)
+            for doc_id, matches in doc_matches.items():
+                doc = docs_map.get(doc_id)
                 if doc:
-                    similarity = float(row.similarity)
-                    if similarity == similarity and 0 <= similarity <= 1:  # Filter NaN
-                        results.append(UnifiedSearchResult(
-                            result_type=ResultType.DOCUMENT,
-                            item=doc,
-                            similarity=similarity,
-                        ))
+                    # Sort matches by similarity (best first)
+                    matches.sort(key=lambda m: m.similarity, reverse=True)
+                    results.append(UnifiedSearchResult(
+                        result_type=ResultType.DOCUMENT,
+                        item=doc,
+                        similarity=matches[0].similarity,  # Best match
+                        matches=matches,
+                    ))
 
             return results
 

@@ -39,6 +39,23 @@ class PageContent:
 
 
 @dataclass
+class SheetContent:
+    """Content for a single sheet of a spreadsheet."""
+    sheet_name: str
+    sheet_index: int
+    text: str
+
+
+@dataclass
+class SectionContent:
+    """Content for a section of text/markdown."""
+    section_index: int
+    title: Optional[str]  # Header text for markdown, None for plain text
+    level: Optional[int]  # Header level (1-6) for markdown
+    text: str
+
+
+@dataclass
 class EmbeddingResult:
     """Result of embedding generation."""
     embeddings_created: int
@@ -171,8 +188,10 @@ class DocumentEmbeddingService:
         """
         Generate embedding for a document.
 
-        For documents without page structure, generates a single embedding.
-        For multi-page documents, generates page-level embeddings.
+        Uses stored extraction structure if available:
+        - For PDFs with pages: generates per-page embeddings
+        - For XLSX with sheets: generates per-sheet embeddings
+        - For others: generates whole-document or chunked embeddings
 
         Args:
             document: Document to embed
@@ -180,6 +199,56 @@ class DocumentEmbeddingService:
         Returns:
             EmbeddingResult with counts
         """
+        # Check for stored extraction structure (pages/sheets)
+        structure = await self.repository.get_extraction_structure(document.id)
+
+        if structure:
+            if "pages" in structure and structure["pages"]:
+                # Convert to PageContent objects
+                pages = [
+                    PageContent(
+                        page_number=p["page"],
+                        text=p["text"],
+                    )
+                    for p in structure["pages"]
+                    if p.get("text")
+                ]
+                if pages:
+                    logger.info(f"Generating per-page embeddings for {len(pages)} pages")
+                    return await self.generate_page_embeddings(document, pages)
+
+            elif "sheets" in structure and structure["sheets"]:
+                # Convert to SheetContent objects
+                sheets = [
+                    SheetContent(
+                        sheet_name=s.get("sheet", f"Sheet {s.get('sheet_index', 0) + 1}"),
+                        sheet_index=s.get("sheet_index", 0),
+                        text=s["text"],
+                    )
+                    for s in structure["sheets"]
+                    if s.get("text")
+                ]
+                if sheets:
+                    logger.info(f"Generating per-sheet embeddings for {len(sheets)} sheets")
+                    return await self.generate_sheet_embeddings(document, sheets)
+
+            elif "sections" in structure and structure["sections"]:
+                # Convert to SectionContent objects (for text/markdown)
+                sections = [
+                    SectionContent(
+                        section_index=s.get("section", 0),
+                        title=s.get("title"),
+                        level=s.get("level"),
+                        text=s["text"],
+                    )
+                    for s in structure["sections"]
+                    if s.get("text")
+                ]
+                if sections:
+                    logger.info(f"Generating per-section embeddings for {len(sections)} sections")
+                    return await self.generate_section_embeddings(document, sections)
+
+        # Fall back to standard document embedding
         # Delete any existing embeddings (for re-embedding)
         await self.repository.delete_embeddings(document.id)
 
@@ -302,6 +371,70 @@ class DocumentEmbeddingService:
             model=self.model,
         )
 
+    async def generate_sheet_embeddings(
+        self,
+        document: Document,
+        sheets: List[SheetContent],
+    ) -> EmbeddingResult:
+        """
+        Generate per-sheet embeddings for multi-sheet spreadsheets.
+
+        Args:
+            document: Document being embedded
+            sheets: List of sheet contents
+
+        Returns:
+            EmbeddingResult with counts
+        """
+        # Delete existing embeddings
+        await self.repository.delete_embeddings(document.id)
+
+        embeddings_created = 0
+        total_chunks = 0
+
+        for sheet in sheets:
+            if not sheet.text or not sheet.text.strip():
+                continue
+
+            # Add document context to each sheet
+            sheet_text = self._prepare_sheet_text(document, sheet)
+
+            if len(sheet_text) <= MAX_CHARS_PER_CHUNK:
+                # Single embedding for sheet
+                embedding = await self.generate_embedding(sheet_text)
+                await self.repository.add_embedding(
+                    document_id=document.id,
+                    embedding=embedding,
+                    page_number=sheet.sheet_index + 1,  # 1-indexed for consistency
+                    chunk_index=0,
+                    chunk_text=sheet_text,
+                    model=self.model,
+                )
+                embeddings_created += 1
+                total_chunks += 1
+            else:
+                # Chunk long sheets
+                chunks = self._chunk_text(sheet_text, MAX_CHARS_PER_CHUNK)
+                for i, chunk in enumerate(chunks):
+                    embedding = await self.generate_embedding(chunk)
+                    await self.repository.add_embedding(
+                        document_id=document.id,
+                        embedding=embedding,
+                        page_number=sheet.sheet_index + 1,
+                        chunk_index=i,
+                        chunk_text=chunk,
+                        model=self.model,
+                    )
+                    embeddings_created += 1
+                    total_chunks += 1
+
+        return EmbeddingResult(
+            embeddings_created=embeddings_created,
+            pages_processed=len(sheets),  # "pages" here means sheets
+            chunks_created=total_chunks,
+            model=self.model,
+        )
+
     def _prepare_page_text(self, document: Document, page: PageContent) -> str:
         """Prepare page text with document context."""
         parts = []
@@ -316,6 +449,108 @@ class DocumentEmbeddingService:
 
         # Add page content
         parts.append(page.text)
+
+        return "\n\n".join(parts)
+
+    def _prepare_sheet_text(self, document: Document, sheet: SheetContent) -> str:
+        """Prepare sheet text with document context."""
+        parts = []
+
+        # Add document context
+        if document.title:
+            parts.append(f"Document: {document.title}")
+        elif document.original_filename:
+            parts.append(f"Document: {document.original_filename}")
+
+        parts.append(f"Sheet: {sheet.sheet_name}")
+
+        # Add sheet content
+        parts.append(sheet.text)
+
+        return "\n\n".join(parts)
+
+    async def generate_section_embeddings(
+        self,
+        document: Document,
+        sections: List[SectionContent],
+    ) -> EmbeddingResult:
+        """
+        Generate per-section embeddings for text/markdown documents.
+
+        Args:
+            document: Document being embedded
+            sections: List of section contents
+
+        Returns:
+            EmbeddingResult with counts
+        """
+        # Delete existing embeddings
+        await self.repository.delete_embeddings(document.id)
+
+        embeddings_created = 0
+        total_chunks = 0
+
+        for section in sections:
+            if not section.text or not section.text.strip():
+                continue
+
+            # Add document context to each section
+            section_text = self._prepare_section_text(document, section)
+
+            if len(section_text) <= MAX_CHARS_PER_CHUNK:
+                # Single embedding for section
+                embedding = await self.generate_embedding(section_text)
+                await self.repository.add_embedding(
+                    document_id=document.id,
+                    embedding=embedding,
+                    page_number=section.section_index + 1,  # 1-indexed
+                    chunk_index=0,
+                    chunk_text=section_text,
+                    model=self.model,
+                )
+                embeddings_created += 1
+                total_chunks += 1
+            else:
+                # Chunk long sections
+                chunks = self._chunk_text(section_text, MAX_CHARS_PER_CHUNK)
+                for i, chunk in enumerate(chunks):
+                    embedding = await self.generate_embedding(chunk)
+                    await self.repository.add_embedding(
+                        document_id=document.id,
+                        embedding=embedding,
+                        page_number=section.section_index + 1,
+                        chunk_index=i,
+                        chunk_text=chunk,
+                        model=self.model,
+                    )
+                    embeddings_created += 1
+                    total_chunks += 1
+
+        return EmbeddingResult(
+            embeddings_created=embeddings_created,
+            pages_processed=len(sections),
+            chunks_created=total_chunks,
+            model=self.model,
+        )
+
+    def _prepare_section_text(self, document: Document, section: SectionContent) -> str:
+        """Prepare section text with document context."""
+        parts = []
+
+        # Add document context
+        if document.title:
+            parts.append(f"Document: {document.title}")
+        elif document.original_filename:
+            parts.append(f"Document: {document.original_filename}")
+
+        # Add section header if available
+        if section.title:
+            parts.append(f"Section: {section.title}")
+        else:
+            parts.append(f"Section {section.section_index + 1}")
+
+        # Add section content
+        parts.append(section.text)
 
         return "\n\n".join(parts)
 
@@ -415,3 +650,75 @@ class DocumentEmbeddingService:
                 await self.repository.mark_task_failed(task.id, str(e))
 
         return processed
+
+    async def regenerate_pending_embeddings(
+        self,
+        limit: int = 10,
+    ) -> int:
+        """
+        Regenerate embeddings for documents whose text has changed.
+
+        Processes "regenerate_embedding" tasks, which delete existing
+        embeddings before generating new ones.
+
+        Args:
+            limit: Maximum documents to process
+
+        Returns:
+            Number of documents processed
+        """
+        # Get pending regeneration tasks from queue
+        tasks = await self.repository.get_pending_tasks(
+            task_type="regenerate_embedding",
+            limit=limit,
+        )
+
+        processed = 0
+        for task in tasks:
+            # Claim the task
+            claimed = await self.repository.mark_task_processing(
+                task_id=task.id,
+                worker_id="embedding_service",
+            )
+            if not claimed:
+                continue
+
+            try:
+                document = await self.repository.get_by_id(task.document_id)
+                if not document:
+                    await self.repository.mark_task_failed(task.id, "Document not found")
+                    continue
+
+                # Delete existing embeddings first
+                deleted_count = await self.repository.delete_embeddings(document.id)
+                if deleted_count > 0:
+                    logger.info(f"Deleted {deleted_count} old embeddings for document {document.id}")
+
+                # Generate new embeddings
+                result = await self.generate_document_embedding(document)
+                await self.repository.mark_task_completed(task.id)
+                processed += 1
+                logger.info(f"Regenerated {result.embeddings_created} embeddings for document {document.id}")
+
+            except Exception as e:
+                logger.error(f"Failed to regenerate embeddings for document {task.document_id}: {e}")
+                await self.repository.mark_task_failed(task.id, str(e))
+
+        return processed
+
+    async def process_all_pending(
+        self,
+        limit: int = 10,
+    ) -> dict:
+        """
+        Process all pending embedding tasks (new and regeneration).
+
+        Args:
+            limit: Maximum documents to process per type
+
+        Returns:
+            Dict with counts: {"generated": N, "regenerated": M}
+        """
+        generated = await self.embed_pending_documents(limit=limit)
+        regenerated = await self.regenerate_pending_embeddings(limit=limit)
+        return {"generated": generated, "regenerated": regenerated}

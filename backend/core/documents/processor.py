@@ -8,10 +8,10 @@ Reuses existing SandboxedExtractor for text extraction from supported formats.
 import hashlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 from uuid import UUID
 
 from backend.core.documents.models import Document, ExtractionStatus
@@ -29,6 +29,15 @@ class ExtractionResult:
     page_count: Optional[int] = None
     extraction_model: Optional[str] = None
     extraction_cost: float = 0.0
+    # Structured data for per-page/per-sheet/per-section extraction
+    pages: Optional[List[Dict[str, Any]]] = None  # [{"page": 1, "text": "..."}, ...]
+    sheets: Optional[List[Dict[str, Any]]] = None  # [{"sheet": "Name", "sheet_index": 0, "text": "..."}, ...]
+    sections: Optional[List[Dict[str, Any]]] = None  # [{"section": 0, "title": "...", "text": "..."}, ...]
+
+    @property
+    def has_structure(self) -> bool:
+        """True if structured data (pages/sheets/sections) is available."""
+        return bool(self.pages or self.sheets or self.sections)
 
 
 class DocumentProcessor:
@@ -235,6 +244,80 @@ class DocumentProcessor:
                 quality_score=0.0,
             )
 
+    async def extract_with_structure(
+        self,
+        document: Document,
+        file_content: bytes,
+    ) -> ExtractionResult:
+        """
+        Extract text with page/sheet structure when available.
+
+        For PDFs: returns per-page content
+        For XLSX: returns per-sheet content
+        For other formats: falls back to regular extraction
+
+        Args:
+            document: Document to extract text from
+            file_content: Binary content of the file
+
+        Returns:
+            ExtractionResult with text and optional pages/sheets
+        """
+        if self.extractor is None:
+            logger.error("SandboxedExtractor not available")
+            return ExtractionResult(
+                text=None,
+                method="none",
+                quality_score=0.0,
+            )
+
+        mime_type = document.mime_type or "application/octet-stream"
+        filename = document.original_filename or "unknown"
+
+        try:
+            # Try structured extraction first
+            structured_result = await self.extractor.extract_structured(
+                content=file_content,
+                content_type=mime_type,
+                filename=filename,
+            )
+
+            if structured_result is not None and structured_result.success:
+                # Determine if pages, sheets, or sections based on structure
+                pages = None
+                sheets = None
+                sections = None
+
+                if structured_result.items:
+                    first_item = structured_result.items[0]
+                    if "page" in first_item:
+                        pages = structured_result.items
+                    elif "sheet" in first_item:
+                        sheets = structured_result.items
+                    elif "section" in first_item:
+                        sections = structured_result.items
+
+                combined_text = structured_result.total_text
+                quality_score = self._score_quality(combined_text) if combined_text else 0.0
+
+                return ExtractionResult(
+                    text=combined_text,
+                    method="sandboxed_structured",
+                    quality_score=quality_score,
+                    page_count=structured_result.count,
+                    pages=pages,
+                    sheets=sheets,
+                    sections=sections,
+                )
+
+            # Fall back to regular extraction for unsupported types
+            return await self.extract_text(document, file_content)
+
+        except Exception as e:
+            logger.error(f"Structured extraction failed for document {document.id}: {e}")
+            # Fall back to regular extraction
+            return await self.extract_text(document, file_content)
+
     def _score_quality(self, text: str) -> float:
         """
         Score the quality of extracted text.
@@ -337,3 +420,170 @@ class DocumentProcessor:
         # Truncate at word boundary
         truncated = first_para[:max_length].rsplit(' ', 1)[0]
         return truncated + "..."
+
+    async def handle_file_change(
+        self,
+        origin_type: str,
+        origin_host: str,
+        file_path: str,
+        new_checksum: str,
+        file_size: int,
+        mime_type: Optional[str] = None,
+        file_modified_at: Optional[datetime] = None,
+    ) -> Tuple[Optional[Document], bool, Optional[UUID]]:
+        """
+        Handle a file whose content has changed at a known path.
+
+        Checks if we have an existing origin for this path:
+        - If yes and checksum differs: update origin to point to new/existing document
+        - If no: create new document and origin as usual
+
+        Args:
+            origin_type: Type of origin ('folder', etc.)
+            origin_host: Host where file is located
+            file_path: Full path to file
+            new_checksum: New SHA-256 checksum
+            file_size: New file size
+            mime_type: MIME type
+            file_modified_at: File modification time
+
+        Returns:
+            Tuple of (document, is_new_document, orphaned_document_id)
+            - document: The document record (new or existing by checksum)
+            - is_new_document: True if a new document was created
+            - orphaned_document_id: ID of document that may have become orphaned
+        """
+        from pathlib import Path
+
+        filename = Path(file_path).name
+        orphaned_document_id = None
+
+        # Check for existing origin at this path
+        existing_origin = await self.repository.get_origin_by_path(
+            origin_type=origin_type,
+            origin_host=origin_host,
+            origin_path=file_path,
+        )
+
+        if existing_origin:
+            # Get the document this origin currently points to
+            old_document = await self.repository.get_by_id(existing_origin.document_id)
+
+            if old_document and old_document.checksum == new_checksum:
+                # Checksum unchanged - just update verification time
+                await self.repository.update_origin_verified(existing_origin.id)
+                return old_document, False, None
+
+            # Checksum changed - file content was modified
+            logger.info(f"File content changed at {file_path}: {old_document.checksum[:16] if old_document else 'unknown'}... → {new_checksum[:16]}...")
+
+            # Get or create document with new checksum
+            new_document, is_new = await self.repository.get_or_create(
+                checksum=new_checksum,
+                file_size=file_size,
+                mime_type=mime_type,
+                original_filename=filename,
+            )
+
+            # Update origin to point to new document
+            old_document_id = await self.repository.update_origin_document(
+                origin_id=existing_origin.id,
+                new_document_id=new_document.id,
+            )
+
+            # Check if old document became orphaned
+            if old_document_id:
+                was_orphaned = await self.repository.check_and_mark_orphaned(old_document_id)
+                if was_orphaned:
+                    orphaned_document_id = old_document_id
+
+            # If document is new, queue for extraction
+            if is_new:
+                await self.repository.queue_task(
+                    document_id=new_document.id,
+                    task_type="extract_text",
+                    priority=5,
+                )
+
+            # Un-orphan the new document if it was previously orphaned
+            await self.repository.unorphan_document(new_document.id)
+
+            return new_document, is_new, orphaned_document_id
+
+        else:
+            # No existing origin - standard registration
+            document, is_new = await self.repository.get_or_create(
+                checksum=new_checksum,
+                file_size=file_size,
+                mime_type=mime_type,
+                original_filename=filename,
+            )
+
+            # Add new origin
+            await self.repository.add_origin(
+                document_id=document.id,
+                origin_type=origin_type,
+                origin_host=origin_host,
+                origin_path=file_path,
+                origin_filename=filename,
+                file_modified_at=file_modified_at,
+                is_primary=is_new,
+            )
+
+            if is_new:
+                await self.repository.queue_task(
+                    document_id=document.id,
+                    task_type="extract_text",
+                    priority=5,
+                )
+
+            # Un-orphan if this document was previously orphaned
+            await self.repository.unorphan_document(document.id)
+
+            return document, is_new, None
+
+    async def provide_ocr_text(
+        self,
+        document_id: UUID,
+        ocr_text: str,
+        ocr_method: str = "ocr",
+        ocr_quality: Optional[float] = None,
+        ocr_structure: Optional[List[Dict[str, Any]]] = None,
+        force: bool = False,
+    ) -> Tuple[bool, bool]:
+        """
+        Provide OCR-extracted text for a document.
+
+        Uses quality comparison to decide whether to update:
+        - If existing extraction is empty/short, OCR wins
+        - If force=True, OCR wins
+        - Otherwise, compares quality scores
+
+        Args:
+            document_id: Document UUID
+            ocr_text: OCR-extracted text
+            ocr_method: OCR method used (e.g., 'ocr_tesseract', 'ocr_claude')
+            ocr_quality: Quality score (0.0-1.0). If None, will be calculated.
+            ocr_structure: Optional structure (pages from OCR)
+            force: Force update regardless of quality
+
+        Returns:
+            Tuple of (was_updated, embeddings_queued)
+        """
+        # Calculate quality if not provided
+        if ocr_quality is None:
+            ocr_quality = self._score_quality(ocr_text)
+
+        # Build structure dict if provided
+        structure = None
+        if ocr_structure:
+            structure = {"pages": ocr_structure}
+
+        return await self.repository.update_extraction_with_comparison(
+            document_id=document_id,
+            new_text=ocr_text,
+            new_method=ocr_method,
+            new_quality=ocr_quality,
+            new_structure=structure,
+            force=force,
+        )

@@ -33,6 +33,7 @@ from sqlalchemy import (
     Index,
     Enum,
     Date,
+    JSON,
 )
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
@@ -103,6 +104,10 @@ class Document(Base):
     extraction_cost = Column(Float)          # API cost in USD
     extracted_at = Column(DateTime(timezone=True))
 
+    # Structured extraction data for per-page/per-sheet embeddings
+    # JSON format: {"pages": [{"page": 1, "text": "..."}]} or {"sheets": [{"sheet": "Name", "text": "..."}]}
+    extraction_structure = Column(JSON)
+
     # Plaintext metadata (like email subject - keyword searchable)
     title = Column(String(500))              # Extracted or filename-derived
     summary = Column(String(1000))           # One-line description ("subject" equivalent)
@@ -119,6 +124,11 @@ class Document(Base):
     first_seen_at = Column(DateTime(timezone=True), default=func.now())
     last_seen_at = Column(DateTime(timezone=True), default=func.now())
     is_deleted = Column(Boolean, default=False)
+
+    # Orphan tracking (document has no remaining origins)
+    is_orphaned = Column(Boolean, default=False)
+    orphaned_at = Column(DateTime(timezone=True))  # When it became orphaned
+    # Grace period: orphaned documents are deleted after N days (configurable)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
@@ -142,6 +152,12 @@ class Document(Base):
             'idx_documents_needs_extraction',
             'id',
             postgresql_where=(extraction_status.in_([ExtractionStatus.PENDING.value, ExtractionStatus.FAILED.value]))
+        ),
+        # Partial index for orphaned documents (for cleanup)
+        Index(
+            'idx_documents_orphaned',
+            'orphaned_at',
+            postgresql_where=(is_orphaned == True)
         ),
     )
 

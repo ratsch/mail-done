@@ -369,13 +369,24 @@ class FolderScanner:
                 processed_count += 1
                 continue
 
-            # Register document
+            # Register document (handles both new files and content changes)
             try:
-                document, is_new = await self.processor.register_document(
-                    file_path=str(file_info.path),
+                # Calculate checksum first to detect changes
+                checksum = self.processor.calculate_checksum(str(file_info.path))
+                mime_type = self.processor.get_mime_type(str(file_info.path))
+
+                document, is_new, orphaned_id = await self.processor.handle_file_change(
                     origin_type="folder",
                     origin_host=config.host.name,
+                    file_path=str(file_info.path),
+                    new_checksum=checksum,
+                    file_size=file_info.size,
+                    mime_type=mime_type,
+                    file_modified_at=file_info.mtime_datetime,
                 )
+
+                if orphaned_id:
+                    logger.info(f"Document {orphaned_id} orphaned after file change")
 
                 if is_new:
                     result.new_documents += 1
@@ -386,7 +397,8 @@ class FolderScanner:
                             with open(file_info.path, 'rb') as f:
                                 file_content = f.read()
 
-                            extraction_result = await self.processor.extract_text(
+                            # Use structured extraction for multi-page/multi-sheet documents
+                            extraction_result = await self.processor.extract_with_structure(
                                 document=document,
                                 file_content=file_content,
                             )
@@ -402,7 +414,23 @@ class FolderScanner:
                                     page_count=extraction_result.page_count,
                                 )
                                 result.texts_extracted += 1
-                                logger.debug(f"Extracted {len(extraction_result.text)} chars from {file_info.path.name}")
+
+                                # Store structured data for embedding generation
+                                if extraction_result.has_structure:
+                                    await self.processor.repository.store_extraction_structure(
+                                        document_id=document.id,
+                                        pages=extraction_result.pages,
+                                        sheets=extraction_result.sheets,
+                                        sections=extraction_result.sections,
+                                    )
+                                    if extraction_result.pages:
+                                        logger.debug(f"Extracted {len(extraction_result.pages)} pages from {file_info.path.name}")
+                                    elif extraction_result.sheets:
+                                        logger.debug(f"Extracted {len(extraction_result.sheets)} sheets from {file_info.path.name}")
+                                    elif extraction_result.sections:
+                                        logger.debug(f"Extracted {len(extraction_result.sections)} sections from {file_info.path.name}")
+                                else:
+                                    logger.debug(f"Extracted {len(extraction_result.text)} chars from {file_info.path.name}")
                             else:
                                 # No text extracted (binary file, unsupported format, etc.)
                                 await self.processor.repository.update_extraction(

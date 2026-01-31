@@ -7,7 +7,7 @@ Follows the same patterns as EmailRepository for consistency.
 
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 
 from sqlalchemy import select, update, and_, or_
@@ -192,6 +192,134 @@ class DocumentRepository:
 
         logger.info(f"Updated extraction for document {document_id}: status={extraction_status.value}")
         return document
+
+    async def store_extraction_structure(
+        self,
+        document_id: UUID,
+        pages: Optional[List[Dict[str, Any]]] = None,
+        sheets: Optional[List[Dict[str, Any]]] = None,
+        sections: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Document]:
+        """
+        Store extraction structure (pages/sheets/sections) for later embedding generation.
+
+        Args:
+            document_id: Document UUID
+            pages: List of page dicts [{"page": 1, "text": "..."}, ...]
+            sheets: List of sheet dicts [{"sheet": "Name", "sheet_index": 0, "text": "..."}, ...]
+            sections: List of section dicts [{"section": 0, "title": "...", "text": "..."}, ...]
+
+        Returns:
+            Updated Document or None if not found
+        """
+        document = await self.get_by_id(document_id)
+        if not document:
+            return None
+
+        structure = {}
+        if pages:
+            structure["pages"] = pages
+            logger.info(f"Storing {len(pages)} pages for document {document_id}")
+        if sheets:
+            structure["sheets"] = sheets
+            logger.info(f"Storing {len(sheets)} sheets for document {document_id}")
+        if sections:
+            structure["sections"] = sections
+            logger.info(f"Storing {len(sections)} sections for document {document_id}")
+
+        if structure:
+            document.extraction_structure = structure
+
+        return document
+
+    async def get_extraction_structure(
+        self,
+        document_id: UUID,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get extraction structure (pages/sheets) for embedding generation.
+
+        Returns:
+            Dict with 'pages' or 'sheets' key, or None if not available
+        """
+        document = await self.get_by_id(document_id)
+        if not document or not document.extraction_structure:
+            return None
+        return document.extraction_structure
+
+    async def update_extraction_with_comparison(
+        self,
+        document_id: UUID,
+        new_text: Optional[str],
+        new_method: str,
+        new_quality: float,
+        new_structure: Optional[Dict[str, Any]] = None,
+        force: bool = False,
+    ) -> tuple[bool, bool]:
+        """
+        Update extraction if new quality is better, and queue embedding regeneration.
+
+        Uses priority rules:
+        1. If existing text is empty/tiny (<100 chars), new text wins
+        2. If force=True, new text wins
+        3. Otherwise, compare quality scores
+
+        Args:
+            document_id: Document UUID
+            new_text: New extracted text
+            new_method: Extraction method (e.g., 'ocr_tesseract', 'ocr_claude')
+            new_quality: Quality score of new extraction (0.0-1.0)
+            new_structure: Optional structure (pages/sheets/sections)
+            force: Force update regardless of quality
+
+        Returns:
+            Tuple of (was_updated, embeddings_queued)
+        """
+        document = await self.get_by_id(document_id)
+        if not document:
+            return False, False
+
+        existing_text = document.extracted_text or ""
+        existing_quality = document.extraction_quality or 0.0
+
+        # Decision logic
+        should_update = False
+
+        if force:
+            should_update = True
+            logger.info(f"Document {document_id}: forced extraction update")
+        elif len(existing_text.strip()) < 100:
+            # Existing extraction is empty/tiny - new wins
+            should_update = True
+            logger.info(f"Document {document_id}: existing text too short, using {new_method}")
+        elif new_quality > existing_quality:
+            should_update = True
+            logger.info(f"Document {document_id}: {new_method} quality ({new_quality:.2f}) > existing ({existing_quality:.2f})")
+        else:
+            logger.info(f"Document {document_id}: keeping existing extraction (quality {existing_quality:.2f} >= {new_quality:.2f})")
+
+        if not should_update:
+            return False, False
+
+        # Update extraction
+        document.extracted_text = new_text
+        document.extraction_method = new_method
+        document.extraction_quality = new_quality
+        document.extraction_status = ExtractionStatus.COMPLETED.value
+        document.extracted_at = datetime.utcnow()
+
+        # Update structure if provided
+        if new_structure:
+            document.extraction_structure = new_structure
+
+        # Queue embedding regeneration
+        await self.queue_task(
+            document_id=document_id,
+            task_type="regenerate_embedding",
+            priority=3,  # Higher priority than new documents
+        )
+
+        return True, True
 
     async def set_extraction_status(
         self,
@@ -415,6 +543,172 @@ class DocumentRepository:
         )
         result = self.db.execute(stmt)
         return result.rowcount > 0
+
+    async def update_origin_document(
+        self,
+        origin_id: UUID,
+        new_document_id: UUID,
+    ) -> Optional[UUID]:
+        """
+        Update an origin to point to a different document.
+
+        Used when a file's content changes (new checksum → new document).
+        Returns the old document_id so caller can check if it became orphaned.
+
+        Args:
+            origin_id: Origin UUID to update
+            new_document_id: New document UUID to point to
+
+        Returns:
+            Old document_id, or None if origin not found
+        """
+        origin = self.db.get(DocumentOrigin, origin_id)
+        if not origin:
+            return None
+
+        old_document_id = origin.document_id
+        origin.document_id = new_document_id
+        origin.last_verified_at = datetime.utcnow()
+
+        logger.info(f"Origin {origin_id} moved from document {old_document_id} to {new_document_id}")
+        return old_document_id
+
+    async def get_origin_by_path(
+        self,
+        origin_type: str,
+        origin_host: str,
+        origin_path: str,
+    ) -> Optional[DocumentOrigin]:
+        """Find an origin by its file path."""
+        stmt = (
+            select(DocumentOrigin)
+            .where(DocumentOrigin.origin_type == origin_type)
+            .where(DocumentOrigin.origin_host == origin_host)
+            .where(DocumentOrigin.origin_path == origin_path)
+            .where(DocumentOrigin.is_deleted == False)
+        )
+        result = self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def count_document_origins(
+        self,
+        document_id: UUID,
+        include_deleted: bool = False,
+    ) -> int:
+        """Count how many origins point to a document."""
+        from sqlalchemy import func
+        stmt = (
+            select(func.count(DocumentOrigin.id))
+            .where(DocumentOrigin.document_id == document_id)
+        )
+        if not include_deleted:
+            stmt = stmt.where(DocumentOrigin.is_deleted == False)
+        result = self.db.execute(stmt)
+        return result.scalar() or 0
+
+    async def check_and_mark_orphaned(
+        self,
+        document_id: UUID,
+    ) -> bool:
+        """
+        Check if a document has no remaining origins and mark as orphaned.
+
+        Args:
+            document_id: Document UUID to check
+
+        Returns:
+            True if document was marked orphaned, False otherwise
+        """
+        origin_count = await self.count_document_origins(document_id)
+        if origin_count == 0:
+            document = await self.get_by_id(document_id)
+            if document and not document.is_orphaned:
+                document.is_orphaned = True
+                document.orphaned_at = datetime.utcnow()
+                logger.info(f"Document {document_id} marked as orphaned (no remaining origins)")
+                return True
+        return False
+
+    async def get_orphaned_documents(
+        self,
+        older_than_days: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[Document]:
+        """
+        Get orphaned documents, optionally filtered by age.
+
+        Args:
+            older_than_days: Only return documents orphaned more than N days ago
+            limit: Maximum documents to return
+
+        Returns:
+            List of orphaned documents
+        """
+        stmt = (
+            select(Document)
+            .where(Document.is_orphaned == True)
+            .where(Document.is_deleted == False)
+        )
+
+        if older_than_days is not None:
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(days=older_than_days)
+            stmt = stmt.where(Document.orphaned_at <= cutoff)
+
+        stmt = stmt.order_by(Document.orphaned_at).limit(limit)
+        result = self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete_orphaned_documents(
+        self,
+        older_than_days: Optional[int] = 30,
+        limit: int = 100,
+    ) -> int:
+        """
+        Permanently delete orphaned documents and their embeddings.
+
+        Args:
+            older_than_days: Only delete documents orphaned more than N days ago.
+                           Set to None to delete all orphaned documents.
+            limit: Maximum documents to delete in one call
+
+        Returns:
+            Number of documents deleted
+        """
+        orphans = await self.get_orphaned_documents(
+            older_than_days=older_than_days,
+            limit=limit,
+        )
+
+        deleted_count = 0
+        for doc in orphans:
+            # Embeddings are cascade-deleted via FK
+            self.db.delete(doc)
+            deleted_count += 1
+            logger.info(f"Deleted orphaned document {doc.id} ({doc.original_filename})")
+
+        return deleted_count
+
+    async def unorphan_document(
+        self,
+        document_id: UUID,
+    ) -> bool:
+        """
+        Clear orphaned status (e.g., when a new origin is added).
+
+        Args:
+            document_id: Document UUID
+
+        Returns:
+            True if document was un-orphaned, False if not found or not orphaned
+        """
+        document = await self.get_by_id(document_id)
+        if document and document.is_orphaned:
+            document.is_orphaned = False
+            document.orphaned_at = None
+            logger.info(f"Document {document_id} un-orphaned")
+            return True
+        return False
 
     # =========================================================================
     # Processing Queue
