@@ -68,7 +68,7 @@ def parse_exclude(exclude_str: str) -> list[str]:
 
 async def scan_folder(args):
     """Main scanning logic."""
-    from backend.core.database import get_db
+    from backend.core.database import init_db, get_db
     from backend.core.documents.repository import DocumentRepository
     from backend.core.documents.config import (
         get_host_config,
@@ -85,6 +85,9 @@ async def scan_folder(args):
     )
 
     logger = logging.getLogger(__name__)
+
+    # Initialize database
+    init_db()
 
     # Get database session
     db = next(get_db())
