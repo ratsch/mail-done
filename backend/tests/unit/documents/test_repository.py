@@ -538,6 +538,314 @@ class TestEmbeddingManagement:
         assert result == 5
 
 
+class TestLifecycle:
+    """Tests for document lifecycle operations (orphans, file changes, OCR updates)."""
+
+    @pytest.mark.asyncio
+    async def test_update_origin_document(self, repository, mock_db):
+        """update_origin_document should move origin to new document."""
+        old_doc_id = uuid.uuid4()
+        new_doc_id = uuid.uuid4()
+        origin_id = uuid.uuid4()
+
+        origin = DocumentOrigin(
+            document_id=old_doc_id,
+            origin_type="folder",
+            origin_path="/test.pdf",
+        )
+        origin.id = origin_id
+        mock_db.get.return_value = origin
+
+        result = await repository.update_origin_document(
+            origin_id=origin_id,
+            new_document_id=new_doc_id,
+        )
+
+        assert result == old_doc_id
+        assert origin.document_id == new_doc_id
+        assert origin.last_verified_at is not None
+
+    @pytest.mark.asyncio
+    async def test_update_origin_document_not_found(self, repository, mock_db):
+        """update_origin_document should return None if origin not found."""
+        mock_db.get.return_value = None
+
+        result = await repository.update_origin_document(
+            origin_id=uuid.uuid4(),
+            new_document_id=uuid.uuid4(),
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_origin_by_path(self, repository, mock_db):
+        """get_origin_by_path should find origin by path."""
+        expected_origin = DocumentOrigin(
+            origin_type="folder",
+            origin_host="localhost",
+            origin_path="/path/to/file.pdf",
+        )
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = expected_origin
+        mock_db.execute.return_value = mock_result
+
+        result = await repository.get_origin_by_path(
+            origin_type="folder",
+            origin_host="localhost",
+            origin_path="/path/to/file.pdf",
+        )
+
+        assert result == expected_origin
+
+    @pytest.mark.asyncio
+    async def test_count_document_origins(self, repository, mock_db):
+        """count_document_origins should return origin count."""
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = 3
+        mock_db.execute.return_value = mock_result
+
+        result = await repository.count_document_origins(uuid.uuid4())
+
+        assert result == 3
+
+    @pytest.mark.asyncio
+    async def test_check_and_mark_orphaned_when_no_origins(self, repository, mock_db):
+        """check_and_mark_orphaned should mark document when origins count is 0."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.id = doc_id
+        document.is_orphaned = False
+
+        # count_document_origins returns 0
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 0
+        mock_db.execute.return_value = mock_count_result
+        mock_db.get.return_value = document
+
+        result = await repository.check_and_mark_orphaned(doc_id)
+
+        assert result is True
+        assert document.is_orphaned is True
+        assert document.orphaned_at is not None
+
+    @pytest.mark.asyncio
+    async def test_check_and_mark_orphaned_when_has_origins(self, repository, mock_db):
+        """check_and_mark_orphaned should not mark when origins exist."""
+        doc_id = uuid.uuid4()
+
+        # count_document_origins returns > 0
+        mock_count_result = MagicMock()
+        mock_count_result.scalar.return_value = 2
+        mock_db.execute.return_value = mock_count_result
+
+        result = await repository.check_and_mark_orphaned(doc_id)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_orphaned_documents(self, repository, mock_db):
+        """get_orphaned_documents should return orphaned documents."""
+        orphans = [
+            Document(checksum="abc1", file_size=100, is_orphaned=True),
+            Document(checksum="abc2", file_size=200, is_orphaned=True),
+        ]
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = orphans
+        mock_db.execute.return_value = mock_result
+
+        result = await repository.get_orphaned_documents(older_than_days=30)
+
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_orphaned_documents(self, repository, mock_db):
+        """delete_orphaned_documents should delete orphaned documents."""
+        orphans = [
+            Document(checksum="abc1", file_size=100, is_orphaned=True),
+        ]
+        orphans[0].id = uuid.uuid4()
+        orphans[0].original_filename = "old.pdf"
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = orphans
+        mock_db.execute.return_value = mock_result
+
+        result = await repository.delete_orphaned_documents(older_than_days=30)
+
+        assert result == 1
+        mock_db.delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unorphan_document(self, repository, mock_db):
+        """unorphan_document should clear orphaned status."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.is_orphaned = True
+        document.orphaned_at = datetime.utcnow()
+        mock_db.get.return_value = document
+
+        result = await repository.unorphan_document(doc_id)
+
+        assert result is True
+        assert document.is_orphaned is False
+        assert document.orphaned_at is None
+
+    @pytest.mark.asyncio
+    async def test_unorphan_document_not_orphaned(self, repository, mock_db):
+        """unorphan_document should return False if not orphaned."""
+        document = Document(checksum="abc", file_size=100)
+        document.is_orphaned = False
+        mock_db.get.return_value = document
+
+        result = await repository.unorphan_document(uuid.uuid4())
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_store_extraction_structure_pages(self, repository, mock_db):
+        """store_extraction_structure should store page structure."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        mock_db.get.return_value = document
+
+        pages = [{"page": 1, "text": "Page 1"}, {"page": 2, "text": "Page 2"}]
+        result = await repository.store_extraction_structure(
+            document_id=doc_id,
+            pages=pages,
+        )
+
+        assert result == document
+        assert document.extraction_structure == {"pages": pages}
+
+    @pytest.mark.asyncio
+    async def test_store_extraction_structure_sheets(self, repository, mock_db):
+        """store_extraction_structure should store sheet structure."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        mock_db.get.return_value = document
+
+        sheets = [{"sheet": "Sheet1", "sheet_index": 0, "text": "Data"}]
+        result = await repository.store_extraction_structure(
+            document_id=doc_id,
+            sheets=sheets,
+        )
+
+        assert document.extraction_structure == {"sheets": sheets}
+
+    @pytest.mark.asyncio
+    async def test_get_extraction_structure(self, repository, mock_db):
+        """get_extraction_structure should return stored structure."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.extraction_structure = {"pages": [{"page": 1, "text": "Content"}]}
+        mock_db.get.return_value = document
+
+        result = await repository.get_extraction_structure(doc_id)
+
+        assert result == {"pages": [{"page": 1, "text": "Content"}]}
+
+    @pytest.mark.asyncio
+    async def test_get_extraction_structure_none(self, repository, mock_db):
+        """get_extraction_structure should return None if no structure."""
+        document = Document(checksum="abc", file_size=100)
+        document.extraction_structure = None
+        mock_db.get.return_value = document
+
+        result = await repository.get_extraction_structure(uuid.uuid4())
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_update_extraction_with_comparison_empty_existing(self, repository, mock_db):
+        """update_extraction_with_comparison should update when existing is empty."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.extracted_text = ""  # Empty existing
+        document.extraction_quality = 0.0
+        mock_db.get.return_value = document
+
+        # Mock queue_task
+        mock_db.add = Mock()
+        mock_db.flush = Mock()
+
+        updated, queued = await repository.update_extraction_with_comparison(
+            document_id=doc_id,
+            new_text="OCR extracted text",
+            new_method="ocr_tesseract",
+            new_quality=0.85,
+        )
+
+        assert updated is True
+        assert queued is True
+        assert document.extracted_text == "OCR extracted text"
+        assert document.extraction_method == "ocr_tesseract"
+
+    @pytest.mark.asyncio
+    async def test_update_extraction_with_comparison_better_quality(self, repository, mock_db):
+        """update_extraction_with_comparison should update when quality is better."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.extracted_text = "Existing text content here"
+        document.extraction_quality = 0.5
+        mock_db.get.return_value = document
+        mock_db.add = Mock()
+        mock_db.flush = Mock()
+
+        updated, queued = await repository.update_extraction_with_comparison(
+            document_id=doc_id,
+            new_text="Better OCR text",
+            new_method="ocr_claude",
+            new_quality=0.95,
+        )
+
+        assert updated is True
+        assert document.extraction_quality == 0.95
+
+    @pytest.mark.asyncio
+    async def test_update_extraction_with_comparison_worse_quality(self, repository, mock_db):
+        """update_extraction_with_comparison should not update when quality is worse."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        # Text must be >= 100 chars to trigger quality comparison (otherwise considered "too short")
+        existing_text = "This is a substantial existing text extraction that has good quality and should not be replaced with worse OCR results."
+        document.extracted_text = existing_text
+        document.extraction_quality = 0.9
+        mock_db.get.return_value = document
+
+        updated, queued = await repository.update_extraction_with_comparison(
+            document_id=doc_id,
+            new_text="Worse OCR",
+            new_method="ocr_tesseract",
+            new_quality=0.6,
+        )
+
+        assert updated is False
+        assert queued is False
+        assert document.extracted_text == existing_text
+
+    @pytest.mark.asyncio
+    async def test_update_extraction_with_comparison_force(self, repository, mock_db):
+        """update_extraction_with_comparison should update when force=True."""
+        doc_id = uuid.uuid4()
+        document = Document(checksum="abc", file_size=100)
+        document.extracted_text = "Good existing text content here"
+        document.extraction_quality = 0.9
+        mock_db.get.return_value = document
+        mock_db.add = Mock()
+        mock_db.flush = Mock()
+
+        updated, queued = await repository.update_extraction_with_comparison(
+            document_id=doc_id,
+            new_text="Forced update",
+            new_method="manual",
+            new_quality=0.5,
+            force=True,
+        )
+
+        assert updated is True
+        assert document.extracted_text == "Forced update"
+
+
 class TestStatistics:
     """Tests for statistics methods."""
 

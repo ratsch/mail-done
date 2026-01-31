@@ -35,6 +35,7 @@ def mock_repository():
     repo.mark_task_completed = AsyncMock()
     repo.mark_task_failed = AsyncMock()
     repo.get_by_id = AsyncMock()
+    repo.get_extraction_structure = AsyncMock(return_value=None)
     return repo
 
 

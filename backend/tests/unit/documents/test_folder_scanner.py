@@ -82,8 +82,26 @@ def scan_config(host_config, temp_folder):
 def mock_processor():
     """Create a mock document processor."""
     processor = MagicMock()
-    processor.register_document = AsyncMock(return_value=(MagicMock(), True))
+    # handle_file_change returns (document, is_new, orphaned_id)
+    processor.handle_file_change = AsyncMock(return_value=(MagicMock(), True, None))
     processor.calculate_checksum = MagicMock(return_value="abc123")
+
+    # Mock extract_with_structure returning ExtractionResult-like object
+    extraction_result = MagicMock()
+    extraction_result.text = "Extracted text content"
+    extraction_result.method = "sandboxed"
+    extraction_result.quality_score = 0.8
+    extraction_result.page_count = 1
+    extraction_result.has_structure = False
+    extraction_result.pages = None
+    extraction_result.sheets = None
+    extraction_result.sections = None
+    processor.extract_with_structure = AsyncMock(return_value=extraction_result)
+
+    # Mock repository methods used during scanning
+    processor.repository = MagicMock()
+    processor.repository.update_extraction = AsyncMock()
+    processor.repository.store_extraction_structure = AsyncMock()
     return processor
 
 
@@ -429,7 +447,7 @@ class TestFolderScannerScan:
         result = await scanner.scan(scan_config)
 
         assert result.files_processed > 0
-        assert mock_processor.register_document.call_count == result.files_processed
+        assert mock_processor.handle_file_change.call_count == result.files_processed
 
     @pytest.mark.asyncio
     async def test_scan_dry_run(self, scan_config, mock_processor):
@@ -438,7 +456,7 @@ class TestFolderScannerScan:
         result = await scanner.scan(scan_config, dry_run=True)
 
         assert result.files_processed > 0
-        mock_processor.register_document.assert_not_called()
+        mock_processor.handle_file_change.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_scan_with_limit(self, scan_config, mock_processor):
@@ -452,12 +470,13 @@ class TestFolderScannerScan:
     async def test_scan_counts_duplicates(self, scan_config, mock_processor):
         """Should count duplicate documents separately."""
         # First call: new, second call: duplicate
-        mock_processor.register_document.side_effect = [
-            (MagicMock(), True),   # New
-            (MagicMock(), False),  # Duplicate
-            (MagicMock(), True),   # New
-            (MagicMock(), False),  # Duplicate
-            (MagicMock(), True),   # New
+        # handle_file_change returns (document, is_new, orphaned_id)
+        mock_processor.handle_file_change.side_effect = [
+            (MagicMock(), True, None),   # New
+            (MagicMock(), False, None),  # Duplicate
+            (MagicMock(), True, None),   # New
+            (MagicMock(), False, None),  # Duplicate
+            (MagicMock(), True, None),   # New
         ]
 
         scanner = FolderScanner(mock_processor)
@@ -469,10 +488,11 @@ class TestFolderScannerScan:
     @pytest.mark.asyncio
     async def test_scan_handles_errors(self, scan_config, mock_processor):
         """Should handle and count errors."""
-        mock_processor.register_document.side_effect = [
-            (MagicMock(), True),
+        # handle_file_change returns (document, is_new, orphaned_id)
+        mock_processor.handle_file_change.side_effect = [
+            (MagicMock(), True, None),
             Exception("Test error"),
-            (MagicMock(), True),
+            (MagicMock(), True, None),
         ]
 
         scanner = FolderScanner(mock_processor)
@@ -491,7 +511,7 @@ class TestFolderScannerScan:
         result1 = await scanner.scan(scan_config)
 
         # Reset mock
-        mock_processor.register_document.reset_mock()
+        mock_processor.handle_file_change.reset_mock()
 
         # Second scan should skip cached files
         result2 = await scanner.scan(scan_config)

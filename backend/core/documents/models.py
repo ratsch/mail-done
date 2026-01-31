@@ -180,8 +180,10 @@ class DocumentOrigin(Base):
     # Origin identification (used to retrieve original file)
     origin_type = Column(String(50), nullable=False)  # 'folder', 'email_attachment', 'google_drive'
     origin_host = Column(String(255))                  # 'nas.local', 'laptop', 'nvme-pi'
-    origin_path = Column(Text)                         # Full path to file (for retrieval)
-    origin_filename = Column(String(500))              # Filename at this location
+    # NOTE: origin_path is the FULL file path including filename (e.g., "/path/to/file.pdf")
+    # origin_filename is stored separately for display/search convenience only
+    origin_path = Column(Text)                         # Full path to file INCLUDING filename
+    origin_filename = Column(String(500))              # Filename (redundant, for display/search)
 
     # For email attachments specifically
     email_id = Column(UUID(as_uuid=True), ForeignKey('emails.id', ondelete='SET NULL'))

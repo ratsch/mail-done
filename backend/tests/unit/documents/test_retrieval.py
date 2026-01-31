@@ -55,8 +55,9 @@ def local_origin(sample_document, temp_file):
         document_id=sample_document.id,
         origin_type="folder",
         origin_host="localhost",
-        origin_path=str(temp_file.parent),
-        origin_filename=temp_file.name,
+        # NOTE: origin_path is the FULL file path (not directory)
+        origin_path=str(temp_file),
+        origin_filename=temp_file.name,  # Stored for display/search convenience
         is_primary=True,
         is_deleted=False,
     )
@@ -103,7 +104,7 @@ class TestLocalFilesystemRetrieval:
             document_id=sample_document.id,
             origin_type="folder",
             origin_host="localhost",
-            origin_path="/nonexistent",
+            origin_path="/nonexistent/missing.pdf",  # Full path
             origin_filename="missing.pdf",
             is_primary=True,
             is_deleted=False,
@@ -134,7 +135,7 @@ class TestLocalFilesystemRetrieval:
                 document_id=sample_document.id,
                 origin_type="folder",
                 origin_host="localhost",
-                origin_path="/nonexistent",
+                origin_path="/nonexistent/missing.pdf",  # Full path
                 origin_filename="missing.pdf",
                 is_primary=True,
                 is_deleted=False,
@@ -145,7 +146,7 @@ class TestLocalFilesystemRetrieval:
                 document_id=sample_document.id,
                 origin_type="folder",
                 origin_host="localhost",
-                origin_path=str(secondary_path.parent),
+                origin_path=str(secondary_path),  # Full path
                 origin_filename=secondary_path.name,
                 is_primary=False,
                 is_deleted=False,
@@ -173,7 +174,7 @@ class TestLocalFilesystemRetrieval:
                 document_id=sample_document.id,
                 origin_type="folder",
                 origin_host="localhost",
-                origin_path="/nonexistent",
+                origin_path="/nonexistent/missing.pdf",  # Full path
                 origin_filename="missing.pdf",
                 is_primary=True,
                 is_deleted=False,
@@ -184,7 +185,7 @@ class TestLocalFilesystemRetrieval:
                 document_id=sample_document.id,
                 origin_type="folder",
                 origin_host="localhost",
-                origin_path=str(fallback_path.parent),
+                origin_path=str(fallback_path),  # Full path
                 origin_filename=fallback_path.name,
                 is_primary=False,
                 is_deleted=False,
@@ -207,7 +208,7 @@ class TestLocalFilesystemRetrieval:
             document_id=sample_document.id,
             origin_type="folder",
             origin_host="localhost",
-            origin_path="/nonexistent",
+            origin_path="/nonexistent/missing.pdf",  # Full path
             origin_filename="missing.pdf",
             is_primary=True,
             is_deleted=False,
@@ -390,7 +391,7 @@ class TestOriginAccessibility:
             document_id=sample_document.id,
             origin_type="folder",
             origin_host="localhost",
-            origin_path=str(temp_file.parent),
+            origin_path=str(temp_file),  # Full path including filename
             origin_filename=temp_file.name,
             is_primary=True,
             is_deleted=False,
@@ -401,7 +402,7 @@ class TestOriginAccessibility:
             document_id=sample_document.id,
             origin_type="folder",
             origin_host="localhost",
-            origin_path="/nonexistent",
+            origin_path="/nonexistent/missing.pdf",  # Full path including filename
             origin_filename="missing.pdf",
             is_primary=False,
             is_deleted=False,

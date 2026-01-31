@@ -153,10 +153,15 @@ class DocumentRetrievalService:
             )
 
         # Build full path
+        # NOTE: origin_path stores the FULL file path (not directory)
+        # origin_filename is stored separately for display/search convenience
         if origin.origin_path:
-            full_path = Path(origin.origin_path) / origin.origin_filename
+            full_path = Path(origin.origin_path)
         else:
-            full_path = Path(origin.origin_filename)
+            # Fallback: shouldn't happen, but use filename if path is missing
+            full_path = Path(origin.origin_filename) if origin.origin_filename else None
+            if not full_path:
+                raise OriginNotAccessibleError("Origin has no path")
 
         # For SSH hosts, use SCP
         if host_config.type == "ssh":
@@ -279,20 +284,44 @@ class DocumentRetrievalService:
         try:
             # Import here to avoid circular imports
             from backend.core.email.attachment_extractor import AttachmentExtractor
+            from backend.core.accounts.manager import AccountManager
+            from backend.core.database.repository import EmailRepository
+            from backend.core.database import get_db
+            import asyncio
 
-            extractor = AttachmentExtractor()
-            content = await extractor.get_attachment_content(
-                email_id=origin.email_id,
-                attachment_index=origin.attachment_index,
-            )
+            # Get email details from database
+            db = next(get_db())
+            try:
+                repo = EmailRepository(db)
+                email = repo.get_by_id(origin.email_id)  # Sync method
 
-            if content is None:
-                raise OriginNotAccessibleError("Attachment not found")
+                if not email:
+                    raise OriginNotAccessibleError("Email not found in database")
 
-            return content
+                # Create extractor with account manager
+                account_manager = AccountManager()
+                extractor = AttachmentExtractor(account_manager)
 
-        except ImportError:
-            raise OriginNotAccessibleError("Attachment extractor not available")
+                # Run synchronous IMAP fetch in executor
+                loop = asyncio.get_event_loop()
+                content, filename, content_type = await loop.run_in_executor(
+                    None,
+                    lambda: extractor.get_attachment(
+                        account_id=email.account_id,
+                        folder=email.folder,
+                        uid=email.uid,
+                        attachment_index=origin.attachment_index,
+                        message_id=email.message_id,
+                    )
+                )
+
+                return content
+
+            finally:
+                db.close()
+
+        except ImportError as e:
+            raise OriginNotAccessibleError(f"Required module not available: {e}")
         except Exception as e:
             raise OriginNotAccessibleError(f"Failed to retrieve attachment: {e}")
 
@@ -334,10 +363,13 @@ class DocumentRetrievalService:
             )
 
         # Build full path
+        # NOTE: origin_path stores the FULL file path (not directory)
         if origin.origin_path:
-            full_path = Path(origin.origin_path) / origin.origin_filename
+            full_path = Path(origin.origin_path)
         else:
-            full_path = Path(origin.origin_filename)
+            full_path = Path(origin.origin_filename) if origin.origin_filename else None
+            if not full_path:
+                return False
 
         # For SSH, we'd need to test connectivity
         if host_config.type == "ssh":
@@ -389,17 +421,20 @@ class DocumentRetrievalService:
             from backend.core.database import get_db
 
             db = next(get_db())
-            repo = EmailRepository(db)
-            email = await repo.get_by_id(origin.email_id)
+            try:
+                repo = EmailRepository(db)
+                email = repo.get_by_id(origin.email_id)  # Sync method
 
-            if not email:
-                return False
+                if not email:
+                    return False
 
-            # Check if attachment index is valid
-            if not email.attachments:
-                return False
+                # Check if attachment index is valid using attachment_info (JSON list)
+                if not email.attachment_info:
+                    return False
 
-            return origin.attachment_index < len(email.attachments)
+                return origin.attachment_index < len(email.attachment_info)
+            finally:
+                db.close()
 
         except Exception:
             return False
