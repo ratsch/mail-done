@@ -818,6 +818,139 @@ async def test_search_includes_metadata_only_docs():
 
 ---
 
+## Testing Requirements
+
+**Critical:** Every phase MUST include comprehensive unit tests that pass before proceeding to the next phase. Tests are NOT optional and should be written alongside the implementation.
+
+### Test Organization
+
+```
+backend/tests/
+├── unit/
+│   ├── test_embeddings.py              # Phase 0 (DONE)
+│   ├── documents/
+│   │   ├── test_models.py              # Phase 1 - SQLAlchemy models
+│   │   ├── test_repository.py          # Phase 1 - Repository CRUD
+│   │   ├── test_processor.py           # Phase 1 - Document processor
+│   │   ├── test_embedding_service.py   # Phase 1 - Document embeddings
+│   │   ├── test_folder_scanner.py      # Phase 2 - Folder scanning
+│   │   ├── test_retrieval.py           # Phase 2 - Document retrieval
+│   │   ├── test_ocr_pipeline.py        # Phase 3 - OCR processing
+│   │   ├── test_quality_scorer.py      # Phase 3 - Quality scoring
+│   │   └── test_search.py              # Phase 4 - Document search
+│   └── ...
+└── integration/
+    ├── test_documents.py               # Phase 1 - Full workflow
+    └── test_document_search.py         # Phase 4 - Search integration
+```
+
+### Phase-Specific Test Requirements
+
+#### Phase 0 Tests (✓ COMPLETED)
+- `test_attachment_text_included_in_embedding`
+- `test_multiple_attachments_included`
+- `test_attachment_text_truncated`
+- `test_max_attachments_limit`
+- `test_no_attachments_still_works`
+- `test_attachment_without_extracted_text`
+- `test_attachment_with_empty_text`
+- `test_metadata_still_included_with_attachments`
+
+#### Phase 1 Tests (REQUIRED)
+
+**test_models.py:**
+- `test_document_model_creation`
+- `test_document_checksum_unique_constraint`
+- `test_document_origin_relationship`
+- `test_document_embedding_relationship`
+- `test_extraction_status_enum_values`
+- `test_encrypted_text_field`
+
+**test_repository.py:**
+- `test_create_document`
+- `test_get_document_by_id`
+- `test_get_document_by_checksum`
+- `test_add_origin`
+- `test_add_duplicate_origin_ignored`
+- `test_update_extraction`
+- `test_queue_task`
+- `test_get_pending_tasks`
+- `test_mark_task_completed`
+- `test_mark_task_failed_with_retry`
+
+**test_processor.py:**
+- `test_register_new_document`
+- `test_register_duplicate_document`
+- `test_calculate_checksum`
+- `test_extract_text_from_pdf`
+- `test_extract_text_from_docx`
+- `test_handle_unsupported_mime_type`
+- `test_handle_extraction_error`
+
+**test_embedding_service.py:**
+- `test_prepare_document_for_embedding`
+- `test_prepare_document_with_no_text`
+- `test_prepare_document_with_metadata_only`
+- `test_generate_page_embeddings`
+- `test_chunking_long_pages`
+- `test_uses_correct_embedding_model`
+
+#### Phase 2 Tests (REQUIRED)
+
+**test_folder_scanner.py:**
+- `test_discover_files_recursive`
+- `test_discover_files_non_recursive`
+- `test_filter_by_extension`
+- `test_exclude_patterns`
+- `test_skip_hidden_files`
+- `test_max_file_size_limit`
+- `test_scan_registers_new_documents`
+- `test_scan_detects_duplicates`
+- `test_incremental_scan_skips_unchanged`
+
+**test_retrieval.py:**
+- `test_retrieve_from_local_filesystem`
+- `test_retrieve_from_network_mount`
+- `test_retrieve_via_ssh`
+- `test_retrieve_from_imap`
+- `test_check_origin_accessible`
+- `test_fallback_to_next_origin`
+
+#### Phase 3 Tests (REQUIRED if OCR enabled)
+
+**test_ocr_pipeline.py:**
+- `test_tesseract_extracts_text`
+- `test_pdftotext_for_text_pdfs`
+- `test_claude_fallback_on_low_quality`
+- `test_respects_quality_threshold`
+- `test_respects_cost_budget`
+- `test_rate_limiting`
+
+**test_quality_scorer.py:**
+- `test_good_text_scores_high`
+- `test_garbled_text_scores_low`
+- `test_empty_text_scores_zero`
+- `test_detects_common_ocr_errors`
+
+#### Phase 4 Tests (REQUIRED)
+
+**test_search.py:**
+- `test_semantic_search_finds_document`
+- `test_search_with_document_type_filter`
+- `test_search_with_quality_filter`
+- `test_search_with_date_range_filter`
+- `test_find_similar_documents`
+- `test_search_includes_metadata_only_docs`
+- `test_search_performance_under_500ms`
+
+### Test Coverage Requirements
+
+- **Unit tests:** ≥80% line coverage for new code
+- **All tests must pass** before merging phase commits
+- **Run tests after each phase:** `poetry run pytest backend/tests/unit/`
+
+---
+
 ## Timeline Summary
 
 | Phase | Duration | Dependencies |
