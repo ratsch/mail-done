@@ -371,6 +371,69 @@ class SandboxedExtractor:
         """Extract text from iCalendar in sandbox."""
         return await self._run_extraction('ics', ics_bytes)
 
+    async def extract_text(
+        self,
+        content: bytes,
+        content_type: str,
+        filename: str = "unknown",
+    ) -> Optional[str]:
+        """
+        Generic text extraction that dispatches based on MIME type.
+
+        Args:
+            content: File content as bytes
+            content_type: MIME type (e.g., 'application/pdf')
+            filename: Original filename (used as fallback for type detection)
+
+        Returns:
+            Extracted text or None if extraction fails/unsupported
+        """
+        # Map MIME types to extraction methods
+        mime_to_method = {
+            'application/pdf': self.extract_pdf,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': self.extract_docx,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': self.extract_xlsx,
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation': self.extract_pptx,
+            'application/msword': self.extract_docx,  # Old .doc format (best effort)
+            'application/vnd.ms-excel': self.extract_xlsx,  # Old .xls format
+            'application/vnd.ms-powerpoint': self.extract_pptx,  # Old .ppt format
+            'application/rtf': self.extract_rtf,
+            'text/rtf': self.extract_rtf,
+            'text/calendar': self.extract_ics,
+        }
+
+        # Try by MIME type first
+        extract_method = mime_to_method.get(content_type)
+
+        # Fallback to extension if MIME type not recognized
+        if not extract_method and filename:
+            ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+            ext_to_method = {
+                'pdf': self.extract_pdf,
+                'docx': self.extract_docx,
+                'doc': self.extract_docx,
+                'xlsx': self.extract_xlsx,
+                'xls': self.extract_xlsx,
+                'pptx': self.extract_pptx,
+                'ppt': self.extract_pptx,
+                'rtf': self.extract_rtf,
+                'ics': self.extract_ics,
+            }
+            extract_method = ext_to_method.get(ext)
+
+        if not extract_method:
+            logger.debug(f"No extractor for {content_type} / {filename}")
+            return None
+
+        try:
+            result = await extract_method(content)
+            if result.success and result.text:
+                return result.text
+            return None
+        except Exception as e:
+            logger.warning(f"Extraction failed for {filename}: {e}")
+            return None
+
 
 # Global singleton for use across the application
 _sandboxed_extractor: Optional[SandboxedExtractor] = None

@@ -152,10 +152,17 @@ async def scan_folder(args):
     if args.dry_run:
         logger.info("DRY RUN - no changes will be made")
 
+    extract_text = not getattr(args, 'no_extract', False)
+    if extract_text:
+        logger.info("Text extraction: ENABLED (use --no-extract to skip)")
+    else:
+        logger.info("Text extraction: DISABLED (documents queued for later)")
+
     result = await scanner.scan(
         config=scan_config,
         limit=args.limit,
         dry_run=args.dry_run,
+        extract_text=extract_text,
         progress_callback=progress_callback if not args.quiet else None,
     )
 
@@ -301,6 +308,11 @@ Examples:
         "--dry-run", "-n",
         action="store_true",
         help="Preview what would be indexed without making changes",
+    )
+    parser.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="Skip text extraction (only register documents, queue for later extraction)",
     )
     parser.add_argument(
         "--detect-deleted",

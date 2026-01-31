@@ -23,7 +23,7 @@ from typing import Iterator, Optional, Dict, Any
 from uuid import UUID
 
 from backend.core.documents.config import FolderScanConfig, HostConfig
-from backend.core.documents.models import Document
+from backend.core.documents.models import Document, ExtractionStatus
 from backend.core.documents.processor import DocumentProcessor
 from backend.core.documents.repository import DocumentRepository
 
@@ -51,6 +51,7 @@ class ScanResult:
     files_processed: int = 0
     new_documents: int = 0
     duplicate_documents: int = 0
+    texts_extracted: int = 0
     skipped_unchanged: int = 0
     skipped_too_large: int = 0
     skipped_excluded: int = 0
@@ -65,18 +66,23 @@ class ScanResult:
 
     def summary(self) -> str:
         """Return a human-readable summary."""
-        return (
-            f"Scan complete:\n"
-            f"  Files found: {self.total_files_found}\n"
-            f"  Processed: {self.files_processed}\n"
-            f"  New documents: {self.new_documents}\n"
-            f"  Duplicates: {self.duplicate_documents}\n"
-            f"  Skipped (unchanged): {self.skipped_unchanged}\n"
-            f"  Skipped (too large): {self.skipped_too_large}\n"
-            f"  Skipped (excluded): {self.skipped_excluded}\n"
-            f"  Errors: {self.errors}\n"
-            f"  Duration: {self.scan_duration_seconds:.1f}s"
-        )
+        lines = [
+            f"Scan complete:",
+            f"  Files found: {self.total_files_found}",
+            f"  Processed: {self.files_processed}",
+            f"  New documents: {self.new_documents}",
+            f"  Duplicates: {self.duplicate_documents}",
+        ]
+        if self.texts_extracted > 0:
+            lines.append(f"  Texts extracted: {self.texts_extracted}")
+        lines.extend([
+            f"  Skipped (unchanged): {self.skipped_unchanged}",
+            f"  Skipped (too large): {self.skipped_too_large}",
+            f"  Skipped (excluded): {self.skipped_excluded}",
+            f"  Errors: {self.errors}",
+            f"  Duration: {self.scan_duration_seconds:.1f}s",
+        ])
+        return "\n".join(lines)
 
 
 class ScanCache:
@@ -314,6 +320,7 @@ class FolderScanner:
         config: FolderScanConfig,
         limit: Optional[int] = None,
         dry_run: bool = False,
+        extract_text: bool = True,
         progress_callback: Optional[callable] = None,
     ) -> ScanResult:
         """
@@ -323,6 +330,7 @@ class FolderScanner:
             config: Scan configuration
             limit: Maximum number of files to process
             dry_run: If True, don't actually register documents
+            extract_text: If True, extract text from documents immediately (default: True)
             progress_callback: Optional callback(file_info, result) for progress
 
         Returns:
@@ -371,6 +379,48 @@ class FolderScanner:
 
                 if is_new:
                     result.new_documents += 1
+
+                    # Extract text if enabled
+                    if extract_text:
+                        try:
+                            with open(file_info.path, 'rb') as f:
+                                file_content = f.read()
+
+                            extraction_result = await self.processor.extract_text(
+                                document=document,
+                                file_content=file_content,
+                            )
+
+                            if extraction_result.text:
+                                # Update document with extracted text
+                                await self.processor.repository.update_extraction(
+                                    document_id=document.id,
+                                    extracted_text=extraction_result.text,
+                                    extraction_status=ExtractionStatus.COMPLETED,
+                                    extraction_method=extraction_result.method,
+                                    extraction_quality=extraction_result.quality_score,
+                                    page_count=extraction_result.page_count,
+                                )
+                                result.texts_extracted += 1
+                                logger.debug(f"Extracted {len(extraction_result.text)} chars from {file_info.path.name}")
+                            else:
+                                # No text extracted (binary file, unsupported format, etc.)
+                                await self.processor.repository.update_extraction(
+                                    document_id=document.id,
+                                    extracted_text=None,
+                                    extraction_status=ExtractionStatus.NO_CONTENT,
+                                    extraction_method=extraction_result.method,
+                                    extraction_quality=0.0,
+                                )
+                        except Exception as e:
+                            logger.warning(f"Text extraction failed for {file_info.path.name}: {e}")
+                            await self.processor.repository.update_extraction(
+                                document_id=document.id,
+                                extracted_text=None,
+                                extraction_status=ExtractionStatus.FAILED,
+                                extraction_method="error",
+                                extraction_quality=0.0,
+                            )
                 else:
                     result.duplicate_documents += 1
 
