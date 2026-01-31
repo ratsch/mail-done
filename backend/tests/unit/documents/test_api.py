@@ -12,7 +12,7 @@ Phase 1 tests for:
 
 import pytest
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
@@ -484,4 +484,269 @@ class TestValidation:
         client = TestClient(app)
         response = client.get("/api/documents/not-a-uuid")
 
+        assert response.status_code == 422
+
+
+# =============================================================================
+# Phase 4: Search Endpoints
+# =============================================================================
+
+class TestSemanticSearchEndpoint:
+    """Tests for /search/semantic endpoint."""
+
+    def test_semantic_search_success(self, sample_document, mock_db):
+        """Should return search results."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_service = MagicMock()
+            mock_service.semantic_search = AsyncMock(return_value=[
+                (sample_document, 0.85),
+            ])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                "/api/documents/search/semantic",
+                params={"query": "quarterly report"}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert "results" in data
+            assert "total" in data
+            assert "query" in data
+            assert data["total"] == 1
+            assert data["query"] == "quarterly report"
+            assert data["results"][0]["similarity"] == 0.85
+
+    def test_semantic_search_with_date_filter(self, mock_db):
+        """Should accept date range filters."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_service = MagicMock()
+            mock_service.semantic_search = AsyncMock(return_value=[])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                "/api/documents/search/semantic",
+                params={
+                    "query": "invoices",
+                    "date_from": "2024-01-01",
+                    "date_to": "2024-12-31",
+                }
+            )
+
+            assert response.status_code == 200
+            # Verify service was called with date params
+            mock_service.semantic_search.assert_called_once()
+            call_kwargs = mock_service.semantic_search.call_args[1]
+            assert call_kwargs["date_from"] is not None
+            assert call_kwargs["date_to"] is not None
+
+    def test_semantic_search_with_type_filter(self, mock_db):
+        """Should accept document type filter."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_service = MagicMock()
+            mock_service.semantic_search = AsyncMock(return_value=[])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                "/api/documents/search/semantic",
+                params={
+                    "query": "contracts",
+                    "document_type": "contract",
+                }
+            )
+
+            assert response.status_code == 200
+            call_kwargs = mock_service.semantic_search.call_args[1]
+            assert call_kwargs["document_type"] == "contract"
+
+    def test_semantic_search_with_quality_filter(self, mock_db):
+        """Should accept minimum quality filter."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_service = MagicMock()
+            mock_service.semantic_search = AsyncMock(return_value=[])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                "/api/documents/search/semantic",
+                params={
+                    "query": "reports",
+                    "min_quality": 0.8,
+                }
+            )
+
+            assert response.status_code == 200
+            call_kwargs = mock_service.semantic_search.call_args[1]
+            assert call_kwargs["min_quality"] == 0.8
+
+    def test_semantic_search_missing_query(self, mock_db):
+        """Should require query parameter."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        client = TestClient(app)
+        response = client.get("/api/documents/search/semantic")
+
+        assert response.status_code == 422  # Validation error
+
+    def test_semantic_search_empty_query(self, mock_db):
+        """Should reject empty query."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        client = TestClient(app)
+        response = client.get(
+            "/api/documents/search/semantic",
+            params={"query": ""}
+        )
+
+        assert response.status_code == 422
+
+    def test_semantic_search_service_error(self, mock_db):
+        """Should return 500 on service error."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_service = MagicMock()
+            mock_service.semantic_search = AsyncMock(
+                side_effect=RuntimeError("pgvector not configured")
+            )
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                "/api/documents/search/semantic",
+                params={"query": "test"}
+            )
+
+            assert response.status_code == 500
+            assert "pgvector" in response.json()["detail"]
+
+
+class TestFindSimilarEndpoint:
+    """Tests for /{document_id}/similar endpoint."""
+
+    def test_find_similar_success(self, sample_document, mock_db):
+        """Should return similar documents."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        similar_doc = Document(
+            checksum="xyz789",
+            file_size=2048,
+            mime_type="application/pdf",
+            original_filename="related.pdf",
+            extraction_status="completed",
+            is_deleted=False,
+        )
+        similar_doc.id = uuid.uuid4()
+        similar_doc.created_at = datetime.now()
+        similar_doc.first_seen_at = datetime.now()
+        similar_doc.last_seen_at = datetime.now()
+
+        # Patch both Repository and SearchService at the same level
+        with patch("backend.api.routes.documents.DocumentRepository") as mock_repo_class, \
+             patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_repo = MagicMock()
+            mock_repo.get_by_id = AsyncMock(return_value=sample_document)
+            mock_repo_class.return_value = mock_repo
+
+            mock_service = MagicMock()
+            mock_service.find_similar = AsyncMock(return_value=[
+                (similar_doc, 0.78),
+            ])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(f"/api/documents/{sample_document.id}/similar")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert data["results"][0]["similarity"] == 0.78
+
+    def test_find_similar_document_not_found(self, mock_db):
+        """Should return 404 when document not found."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        with patch("backend.api.routes.documents.DocumentRepository") as mock_repo_class:
+            mock_repo = MagicMock()
+            mock_repo.get_by_id = AsyncMock(return_value=None)
+            mock_repo_class.return_value = mock_repo
+
+            client = TestClient(app)
+            response = client.get(f"/api/documents/{uuid.uuid4()}/similar")
+
+            assert response.status_code == 404
+
+    def test_find_similar_with_filters(self, sample_document, mock_db):
+        """Should accept filter parameters."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        # Patch both Repository and SearchService at the same level
+        with patch("backend.api.routes.documents.DocumentRepository") as mock_repo_class, \
+             patch("backend.core.documents.search.DocumentSearchService") as mock_service_class:
+            mock_repo = MagicMock()
+            mock_repo.get_by_id = AsyncMock(return_value=sample_document)
+            mock_repo_class.return_value = mock_repo
+
+            mock_service = MagicMock()
+            mock_service.find_similar = AsyncMock(return_value=[])
+            mock_service_class.return_value = mock_service
+
+            client = TestClient(app)
+            response = client.get(
+                f"/api/documents/{sample_document.id}/similar",
+                params={
+                    "top_k": 5,
+                    "similarity_threshold": 0.8,
+                    "same_type_only": True,
+                    "date_from": "2024-01-01",
+                    "date_to": "2024-06-30",
+                }
+            )
+
+            assert response.status_code == 200
+            call_kwargs = mock_service.find_similar.call_args[1]
+            assert call_kwargs["top_k"] == 5
+            assert call_kwargs["similarity_threshold"] == 0.8
+            assert call_kwargs["same_type_only"] is True
+
+    def test_find_similar_validation(self, sample_document, mock_db):
+        """Should validate parameters."""
+        app = create_test_app()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        client = TestClient(app)
+
+        # Invalid top_k
+        response = client.get(
+            f"/api/documents/{sample_document.id}/similar",
+            params={"top_k": 0}
+        )
+        assert response.status_code == 422
+
+        # Invalid similarity_threshold
+        response = client.get(
+            f"/api/documents/{sample_document.id}/similar",
+            params={"similarity_threshold": 1.5}
+        )
         assert response.status_code == 422

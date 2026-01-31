@@ -6,13 +6,15 @@ Provides REST API for document indexing feature:
 - Get document origins
 - Get document statistics
 - Retrieve document content (from origin)
+- Semantic search over documents (Phase 4)
+- Find similar documents (Phase 4)
 """
 
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
 import logging
 
 from backend.api.auth import verify_api_key
@@ -98,6 +100,19 @@ class DocumentStatsResponse(BaseModel):
     by_document_type: dict
     total_embeddings: int
     pending_tasks_by_type: dict
+
+
+class DocumentSearchResult(BaseModel):
+    """Response model for a single search result."""
+    document: DocumentResponse
+    similarity: float
+
+
+class DocumentSearchResponse(BaseModel):
+    """Response model for document search results."""
+    results: List[DocumentSearchResult]
+    total: int
+    query: str
 
 
 # =============================================================================
@@ -359,3 +374,128 @@ async def verify_document_origins(
         "document_id": str(document_id),
         "origins": results,
     }
+
+
+# =============================================================================
+# Search Endpoints (Phase 4)
+# =============================================================================
+
+@router.get("/search/semantic", response_model=DocumentSearchResponse, dependencies=[Depends(verify_api_key)])
+async def search_documents_semantic(
+    query: str = Query(..., min_length=1, description="Natural language search query"),
+    top_k: int = Query(10, ge=1, le=100, description="Maximum number of results"),
+    similarity_threshold: float = Query(0.6, ge=0.0, le=1.0, description="Minimum similarity score"),
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
+    mime_type: Optional[str] = Query(None, description="Filter by MIME type"),
+    min_quality: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum extraction quality"),
+    date_from: Optional[date] = Query(None, description="Documents dated on or after (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="Documents dated on or before (YYYY-MM-DD)"),
+    ai_category: Optional[str] = Query(None, description="Filter by AI category"),
+    db: Session = Depends(get_db)
+):
+    """
+    Semantic search over indexed documents.
+
+    Uses vector embeddings to find documents semantically similar to the query.
+    Supports filtering by document type, date range, quality, and more.
+
+    **Time Horizon:**
+    - Use date_from and date_to to limit search to a specific time period
+    - Document dates are based on the document_date field (extracted from content)
+
+    **Example queries:**
+    - "invoices from Q4 2024" with date_from=2024-10-01, date_to=2024-12-31
+    - "contracts mentioning renewal terms"
+    - "research papers on machine learning"
+    """
+    from backend.core.documents.search import DocumentSearchService
+
+    search_service = DocumentSearchService(db)
+
+    try:
+        results = await search_service.semantic_search(
+            query=query,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+            document_type=document_type,
+            mime_type=mime_type,
+            min_quality=min_quality,
+            date_from=date_from,
+            date_to=date_to,
+            ai_category=ai_category,
+        )
+    except RuntimeError as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return DocumentSearchResponse(
+        results=[
+            DocumentSearchResult(
+                document=DocumentResponse.model_validate(doc),
+                similarity=similarity,
+            )
+            for doc, similarity in results
+        ],
+        total=len(results),
+        query=query,
+    )
+
+
+@router.get("/{document_id}/similar", response_model=DocumentSearchResponse, dependencies=[Depends(verify_api_key)])
+async def find_similar_documents(
+    document_id: UUID,
+    top_k: int = Query(10, ge=1, le=100, description="Maximum number of results"),
+    similarity_threshold: float = Query(0.6, ge=0.0, le=1.0, description="Minimum similarity score"),
+    same_type_only: bool = Query(False, description="Only return documents of the same type"),
+    date_from: Optional[date] = Query(None, description="Documents dated on or after (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="Documents dated on or before (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Find documents similar to a reference document.
+
+    Returns documents with similar content based on vector embeddings.
+
+    **Use cases:**
+    - Find related contracts or invoices
+    - Discover duplicate or near-duplicate documents
+    - Group similar documents by content
+
+    **Time Horizon:**
+    - Use date_from and date_to to limit results to a specific time period
+    """
+    from backend.core.documents.search import DocumentSearchService
+
+    repo = DocumentRepository(db)
+
+    # Verify document exists
+    document = await repo.get_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    search_service = DocumentSearchService(db)
+
+    try:
+        results = await search_service.find_similar(
+            document_id=document_id,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+            same_type_only=same_type_only,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except RuntimeError as e:
+        logger.error(f"Similar search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return DocumentSearchResponse(
+        results=[
+            DocumentSearchResult(
+                document=DocumentResponse.model_validate(doc),
+                similarity=similarity,
+            )
+            for doc, similarity in results
+        ],
+        total=len(results),
+        query=f"similar to {document_id}",
+    )

@@ -2,19 +2,21 @@
 Advanced Search API Endpoints
 
 Provides semantic and hybrid search capabilities using pgvector.
+Includes unified search across emails and documents (Phase 5).
 """
-from typing import Optional, List
+from typing import Optional, List, Literal, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel
 import logging
 
 from backend.api.auth import verify_api_key
 from backend.core.database import get_db
-from backend.core.search import EmbeddingGenerator, VectorSearch, HybridSearch
+from backend.core.search import EmbeddingGenerator, VectorSearch, HybridSearch, UnifiedSearchService, ResultType
 from backend.api.schemas import EmailResponse
+from backend.api.routes.documents import DocumentResponse
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +40,244 @@ class SearchResponse(BaseModel):
     mode: str
     total: int
     results: List[SearchResult]
-    
+
     class Config:
         from_attributes = True
+
+
+class UnifiedResultItem(BaseModel):
+    """A single unified search result item."""
+    result_type: Literal["email", "document"]
+    email: Optional[EmailResponse] = None
+    document: Optional[DocumentResponse] = None
+    similarity: float
+    date: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UnifiedSearchResponse(BaseModel):
+    """Unified search response across emails and documents."""
+    query: str
+    types: str
+    total: int
+    results: List[UnifiedResultItem]
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/unified", dependencies=[Depends(verify_api_key)])
+async def unified_search(
+    q: str = Query(..., description="Search query"),
+    types: Literal["all", "email", "document"] = Query("all", description="What to search: all, email, or document"),
+    top_k: int = Query(20, ge=1, le=100, description="Maximum results"),
+    similarity_threshold: float = Query(0.6, ge=0.0, le=1.0, description="Minimum similarity score"),
+    date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD or ISO 8601)"),
+    date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD or ISO 8601)"),
+    # Email-specific filters
+    email_category: Optional[str] = Query(None, description="Filter emails by category"),
+    email_sender: Optional[str] = Query(None, description="Filter emails by sender"),
+    email_account: Optional[str] = Query(None, description="Filter emails by account"),
+    # Document-specific filters
+    document_type: Optional[str] = Query(None, description="Filter documents by type (invoice, contract, etc.)"),
+    document_mime_type: Optional[str] = Query(None, description="Filter documents by MIME type"),
+    document_min_quality: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum extraction quality"),
+    db: Session = Depends(get_db)
+):
+    """
+    Unified semantic search across emails and documents.
+
+    **Overview:**
+    This endpoint searches both email and document corpora using the same embedding
+    model, returning merged results ranked by similarity score.
+
+    **Type Filtering:**
+    - `all`: Search both emails and documents (default)
+    - `email`: Search only emails
+    - `document`: Search only documents
+
+    **Examples:**
+    ```
+    # Search everything
+    GET /api/search/unified?q=machine learning genomics
+
+    # Search only documents
+    GET /api/search/unified?q=invoice 2024&types=document&document_type=invoice
+
+    # Search emails from specific sender
+    GET /api/search/unified?q=grant opportunity&types=email&email_sender=nsf.gov
+
+    # Cross-domain search with date filter
+    GET /api/search/unified?q=project proposal&date_from=2024-01-01
+    ```
+
+    **Results:**
+    Results from both corpora are merged and sorted by similarity score (highest first).
+    Each result includes a `result_type` field indicating whether it's an email or document.
+    """
+    try:
+        # Parse dates
+        date_from_dt = None
+        date_to_dt = None
+
+        if date_from:
+            try:
+                date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            except:
+                try:
+                    date_from_dt = datetime.strptime(date_from, '%Y-%m-%d')
+                except Exception:
+                    raise HTTPException(status_code=400, detail=f"Invalid date_from format: {date_from}")
+
+        if date_to:
+            try:
+                date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            except:
+                try:
+                    date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
+                except Exception:
+                    raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
+
+        # Create unified search service
+        searcher = UnifiedSearchService(db)
+
+        # Perform unified search
+        results = await searcher.search(
+            query=q,
+            types=types,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+            date_from=date_from_dt,
+            date_to=date_to_dt,
+            email_category=email_category,
+            email_sender=email_sender,
+            email_account=email_account,
+            document_type=document_type,
+            document_mime_type=document_mime_type,
+            document_min_quality=document_min_quality,
+        )
+
+        # Format results
+        unified_results = []
+        for result in results:
+            item = UnifiedResultItem(
+                result_type=result.result_type.value,
+                email=EmailResponse.model_validate(result.item) if result.result_type == ResultType.EMAIL else None,
+                document=DocumentResponse.model_validate(result.item) if result.result_type == ResultType.DOCUMENT else None,
+                similarity=result.similarity,
+                date=result.date,
+            )
+            unified_results.append(item)
+
+        return UnifiedSearchResponse(
+            query=q,
+            types=types,
+            total=len(unified_results),
+            results=unified_results,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unified search error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Unified search failed. Please try again."
+        )
+
+
+@router.get("/unified/related", dependencies=[Depends(verify_api_key)])
+async def find_related_items(
+    email_id: Optional[UUID] = Query(None, description="Reference email UUID"),
+    document_id: Optional[UUID] = Query(None, description="Reference document UUID"),
+    types: Literal["all", "email", "document"] = Query("all", description="What to search: all, email, or document"),
+    top_k: int = Query(10, ge=1, le=50, description="Maximum results"),
+    similarity_threshold: float = Query(0.6, ge=0.0, le=1.0, description="Minimum similarity score"),
+    db: Session = Depends(get_db)
+):
+    """
+    Find related emails and documents based on a reference item.
+
+    **Overview:**
+    Given a reference email or document, find similar items across both corpora.
+    Uses the embedding of the reference item to find semantically similar content.
+
+    **Parameters:**
+    Provide exactly one of `email_id` or `document_id` as the reference.
+
+    **Examples:**
+    ```
+    # Find items related to an email (across both corpora)
+    GET /api/search/unified/related?email_id=abc-123&types=all
+
+    # Find documents similar to an email
+    GET /api/search/unified/related?email_id=abc-123&types=document
+
+    # Find emails similar to a document
+    GET /api/search/unified/related?document_id=xyz-789&types=email
+    ```
+
+    **Use Cases:**
+    - "Find documents related to this grant email"
+    - "Find emails discussing this invoice"
+    - "Group related correspondence and attachments"
+    """
+    # Validate exactly one reference is provided
+    if email_id is None and document_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either email_id or document_id"
+        )
+    if email_id is not None and document_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide only one of email_id or document_id, not both"
+        )
+
+    try:
+        searcher = UnifiedSearchService(db)
+
+        results = await searcher.find_related(
+            email_id=email_id,
+            document_id=document_id,
+            types=types,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+        )
+
+        # Format results
+        unified_results = []
+        for result in results:
+            item = UnifiedResultItem(
+                result_type=result.result_type.value,
+                email=EmailResponse.model_validate(result.item) if result.result_type == ResultType.EMAIL else None,
+                document=DocumentResponse.model_validate(result.item) if result.result_type == ResultType.DOCUMENT else None,
+                similarity=result.similarity,
+                date=result.date,
+            )
+            unified_results.append(item)
+
+        reference_type = "email" if email_id else "document"
+        reference_id = str(email_id) if email_id else str(document_id)
+
+        return {
+            "reference_type": reference_type,
+            "reference_id": reference_id,
+            "types": types,
+            "total": len(unified_results),
+            "results": unified_results,
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Find related error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to find related items. Please try again."
+        )
 
 
 @router.get("", dependencies=[Depends(verify_api_key)])
