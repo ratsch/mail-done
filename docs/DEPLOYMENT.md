@@ -202,18 +202,30 @@ docker compose up -d
 ```bash
 cd ~/mail-done/web-ui
 
-# Create .env with API key
+# Create .env with API key (must match backend API_KEY)
 API_KEY=$(grep "^API_KEY=" ../.env | cut -d= -f2)
 cat > .env << EOF
-BACKEND_API_URL=http://$(hostname):8000
+# Backend API connection
+BACKEND_API_URL=http://localhost:8000
+
+# Web UI server port
 WEB_UI_PORT=8080
+
+# API key for backend authentication (MUST match backend's API_KEY)
 API_KEY=$API_KEY
+
+# External URL for OAuth callbacks (use hostname/IP accessible from browser)
 WEB_UI_BASE_URL=http://$(hostname):8080
+
+# Disable authentication for local/trusted network access
+# Set to 'false' and configure Google OAuth for public access
 AUTH_DISABLED=true
 EOF
 
-# Build and run
+# Build the image
 podman build -t mail-done-webui .
+
+# Run the container
 podman run -d \
     --name mail-done-webui \
     --network host \
@@ -221,9 +233,12 @@ podman run -d \
     --env-file .env \
     localhost/mail-done-webui:latest
 
-# Verify
+# Verify it's running
 curl http://localhost:8080/health
+# Expected: {"status": "healthy"}
 ```
+
+> **Important:** The `API_KEY` in web-ui `.env` must exactly match the `API_KEY` in the backend `.env`. The web-ui uses this key to authenticate requests to the backend API.
 
 ### PostgreSQL Database
 
@@ -238,6 +253,47 @@ postgresql://postgres:$POSTGRES_PASSWORD@localhost:5432/email_processor
 ```
 
 For schema details and direct queries, see [docs/DATABASE.md](DATABASE.md).
+
+### Database Image Options
+
+Choose the appropriate PostgreSQL image based on your needs:
+
+| Image | Size | Extensions | Use Case |
+|-------|------|------------|----------|
+| `pgvector/pgvector:pg16` | 541 MB | vector, pg_trgm, uuid-ossp | Basic deployment, limited disk space |
+| `timescale/timescaledb-ha:pg16` | 5.4 GB | vector, vectorscale, timescaledb, pg_trgm, uuid-ossp | Full features, production use |
+
+**When to use each:**
+
+- **pgvector/pgvector:pg16** (default): Suitable for most deployments. Smaller image, faster to pull.
+
+- **timescale/timescaledb-ha:pg16**: Required if:
+  - Migrations fail with `extension "vectorscale" is not available`
+  - You want DiskANN indexes for faster vector search at scale
+  - You need TimescaleDB for time-series analytics
+
+**Switching images:**
+
+```bash
+# Stop and remove existing database
+podman stop mail-done-db && podman rm mail-done-db
+podman volume rm mail-done-db-data
+
+# Start with timescaledb-ha (note different data path)
+podman run -d \
+    --name mail-done-db \
+    --network host \
+    --restart unless-stopped \
+    -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+    -e POSTGRES_DB=email_processor \
+    -v mail-done-db-data:/home/postgres/pgdata/data \
+    docker.io/timescale/timescaledb-ha:pg16
+```
+
+> **Note:** The data volume path differs between images:
+> - pgvector: `/var/lib/postgresql/data`
+> - timescaledb-ha: `/home/postgres/pgdata/data`
 
 ## Environment Variables Reference
 
@@ -859,22 +915,53 @@ Authentication Enforcement:
 ============================================================
 ```
 
-### Step 8: Run Unit Tests (Recommended)
+### Step 8: Run Tests (Recommended)
 
-Verify the deployment with the test suite:
+#### Functional Deployment Tests
+
+Run the deployment test script to verify all components:
 
 ```bash
-# Run all tests inside container
-podman exec mail-done-api poetry run pytest -v
+# From the mail-done directory
+python3 deploy/test-deployment.py http://localhost:8000
 
-# Quick smoke test
-podman exec mail-done-api poetry run pytest backend/tests/unit/test_health.py -v
-
-# With coverage report
-podman exec mail-done-api poetry run pytest --cov=backend
+# Or test from another machine
+python3 deploy/test-deployment.py http://your-pi:8000
 ```
 
-Expected: All tests pass. If tests fail, check:
+Expected output:
+```
+============================================================
+  Mail-Done Deployment Tests
+============================================================
+✓ Health endpoint accessible
+✓ Database connected
+✓ API has endpoints defined (91 found)
+✓ Authentication enforcement working
+============================================================
+  All 13 tests passed!
+============================================================
+```
+
+#### Unit Tests
+
+> **Note:** The production container image is built with `--only main` to reduce size, so pytest and other dev dependencies are not included. Run unit tests locally or from a dev environment.
+
+**Run locally (not in container):**
+```bash
+# From your development machine with poetry installed
+cd mail-done
+poetry run pytest backend/tests/unit/ -v
+```
+
+**If you need tests in the container**, rebuild with dev dependencies:
+```bash
+# Modify Dockerfile: change "poetry install --only main" to "poetry install"
+# Then rebuild
+podman build -t mail-done-api-dev .
+```
+
+If tests fail, check:
 1. Database connection: `podman logs mail-done-db`
 2. Environment variables: `podman exec mail-done-api env | grep DATABASE`
 3. Config files: `podman exec mail-done-api ls -la /app/config/`
@@ -988,6 +1075,170 @@ podman exec mail-done-api alembic upgrade head
 ```
 
 ### Raspberry Pi Troubleshooting
+
+#### Build Fails with slirp4netns Error
+
+**Problem:** `podman build` fails during `poetry install` with:
+```
+error running container: did not get container start message from parent: EOF
+Error: building at STEP "RUN poetry install...": slirp4netns failed
+```
+
+**Cause:** Network namespace issue with rootless podman on some Pi configurations.
+
+**Solutions:**
+
+1. **Transfer a pre-built image from another host** (recommended):
+   ```bash
+   # On a working host (e.g., another Pi or x86 machine with working builds)
+   podman save localhost/mail-done_api:latest | gzip > /tmp/mail-done-api.tar.gz
+
+   # Transfer to target Pi
+   scp /tmp/mail-done-api.tar.gz pi@target-pi:/tmp/
+
+   # On target Pi - import the image
+   gunzip -c /tmp/mail-done-api.tar.gz | podman load
+
+   # Verify
+   podman images | grep mail-done
+   ```
+
+2. **Try building as root** (less recommended):
+   ```bash
+   sudo podman build -t mail-done-api .
+   ```
+
+3. **Update slirp4netns**:
+   ```bash
+   sudo apt update && sudo apt install -y slirp4netns
+   ```
+
+#### Migration Fails with Extension Error
+
+**Problem:** API container fails on startup with:
+```
+extension "vectorscale" is not available
+```
+
+**Cause:** The standard `pgvector/pgvector:pg16` image doesn't include the vectorscale extension.
+
+**Solutions:**
+
+1. **Use timescaledb-ha image** (see [Database Image Options](#database-image-options)):
+   ```bash
+   # Replace pgvector with timescaledb-ha
+   podman run -d --name mail-done-db ... docker.io/timescale/timescaledb-ha:pg16
+   ```
+
+2. **Or import schema manually and skip migrations** (see [Manual Schema Setup](#manual-schema-setup-skip-migrations)).
+
+#### Migration Fails with SQLAlchemy Error
+
+**Problem:** Migration crashes with:
+```
+TypeError: sqlalchemy.cyextension.immutabledict.immutabledict is not a sequence
+```
+
+**Cause:** Version mismatch between SQLAlchemy/Alembic in the container vs. what migrations expect.
+
+**Solution:** Skip automatic migrations and set up the schema manually:
+
+1. Import schema from a working database (see [Manual Schema Setup](#manual-schema-setup-skip-migrations))
+2. Start API without running migrations
+
+---
+
+### Manual Schema Setup (Skip Migrations)
+
+If migrations fail (due to extension issues, version mismatches, or compatibility problems), you can set up the database schema manually:
+
+#### Option 1: Import from Production Database
+
+```bash
+# On production host - export schema only (no data)
+podman exec mail-done-db pg_dump -U postgres -d email_processor \
+    --schema-only --no-owner --no-privileges > /tmp/schema.sql
+
+# Transfer to new host
+scp production-host:/tmp/schema.sql /tmp/
+
+# Import to new database
+cat /tmp/schema.sql | podman exec -i mail-done-db psql -U postgres -d email_processor
+
+# Check tables were created
+podman exec mail-done-db psql -U postgres -d email_processor -c '\dt'
+```
+
+#### Option 2: Start API Without Migrations
+
+Override the container startup command to skip the `alembic upgrade head` step:
+
+```bash
+podman run -d \
+    --name mail-done-api \
+    --network host \
+    --restart unless-stopped \
+    --env-file .env \
+    -e PORT=8000 \
+    -e DATABASE_URL="postgresql://postgres:$POSTGRES_PASSWORD@localhost:5432/email_processor" \
+    -v "$PWD/config:/app/config:ro" \
+    localhost/mail-done_api:latest \
+    sh -c 'poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}'
+```
+
+#### Stamp Alembic Version
+
+After manually creating the schema, mark migrations as applied:
+
+```bash
+# Check current alembic version on production
+podman exec mail-done-db psql -U postgres -d email_processor \
+    -c "SELECT * FROM alembic_version;"
+
+# Insert the same version on new database
+podman exec mail-done-db psql -U postgres -d email_processor \
+    -c "INSERT INTO alembic_version (version_num) VALUES ('001_initial');"
+```
+
+---
+
+### Verify Deployment
+
+After deployment, verify all components are working:
+
+```bash
+# 1. Check all containers are running
+podman ps --filter "name=mail-done"
+
+# Expected: mail-done-db, mail-done-api, mail-done-webui (if deployed)
+
+# 2. Test API health
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# Expected: {"status": "healthy", "database": "connected", ...}
+
+# 3. Test authenticated endpoint
+API_KEY=$(grep "^API_KEY=" .env | cut -d= -f2)
+curl -s -H "X-API-Key: $API_KEY" http://localhost:8000/api/stats | python3 -m json.tool
+
+# 4. Test web-ui (if deployed)
+curl -s http://localhost:8080/health
+
+# 5. Check database extensions
+podman exec mail-done-db psql -U postgres -d email_processor -c '\dx'
+
+# Expected: vector, pg_trgm, uuid-ossp (and vectorscale if using timescaledb-ha)
+
+# 6. Check tables exist
+podman exec mail-done-db psql -U postgres -d email_processor -c '\dt' | head -20
+
+# Expected: ~24 tables including emails, email_metadata, classifications, etc.
+
+# 7. Run functional test suite
+python3 deploy/test-deployment.py http://localhost:8000
+```
+
+---
 
 #### Slow Container Builds
 
