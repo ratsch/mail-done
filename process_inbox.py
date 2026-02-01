@@ -3158,13 +3158,14 @@ async def main():
         try:
             from datetime import datetime as dt
             from backend.core.accounts.manager import AccountManager
-            from backend.core.database import get_db
+            from backend.core.database import init_db, get_db
             from backend.core.database.repository import EmailRepository
             from backend.core.email.attachment_extractor import AttachmentExtractor, EmailNotFoundError, IMAPConnectionError
             from backend.core.documents.attachment_indexer import AttachmentIndexer
             from backend.core.email.models import AttachmentInfo
 
             account_manager = AccountManager()
+            init_db()
             db_session = next(get_db())
             repo = EmailRepository(db_session)
 
