@@ -133,9 +133,6 @@ For a remote backend (e.g., on a Raspberry Pi or server):
 ```bash
 # Direct connection
 BACKEND_API_URL=http://your-server:8000
-
-# Via Tailscale
-BACKEND_API_URL=http://mail-done.your-tailnet.ts.net:8000
 ```
 
 ## Usage

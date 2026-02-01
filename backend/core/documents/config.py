@@ -26,7 +26,7 @@ def _get_stable_machine_id() -> str:
 
     Uses LOCAL_MACHINE_NAME environment variable if set, otherwise falls back
     to socket.gethostname(). Set LOCAL_MACHINE_NAME to your preferred
-    SSH-accessible hostname (e.g., Tailscale name).
+    SSH-accessible hostname.
 
     Returns a hostname suitable for SSH access and document retrieval.
     """

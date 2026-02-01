@@ -644,13 +644,6 @@ sudo systemctl enable --now caddy
 
 Caddy automatically provisions Let's Encrypt certificates.
 
-**Alternative: Use Tailscale**
-
-For private access without public exposure:
-```bash
-tailscale up
-# Access via: http://your-pi-hostname:8000
-```
 ```
 
 ---

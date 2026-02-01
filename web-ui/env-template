@@ -17,7 +17,6 @@
 # Examples:
 #   - Local: http://localhost:8000
 #   - Remote server: http://your-server:8000
-#   - Via Tailscale: http://mail-done.your-tailnet.ts.net:8000
 BACKEND_API_URL=http://localhost:8000
 
 # -----------------------------------------------------------------------------

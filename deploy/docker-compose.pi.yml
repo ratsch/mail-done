@@ -1,7 +1,7 @@
 # mail-done Deployment for Raspberry Pi / ARM64
 #
 # Optimized for Raspberry Pi with Podman
-# Uses host networking for simplicity with Tailscale
+# Uses host networking for simplicity
 #
 # Usage:
 #   # On the Pi, clone the repo and configure
@@ -51,7 +51,7 @@ services:
           memory: 256M
 
   # ==========================================================================
-  # Backend API (host network for Tailscale exposure)
+  # Backend API (host network for direct access)
   # ==========================================================================
   api:
     build:
@@ -82,38 +82,6 @@ services:
       retries: 3
       start_period: 15s
 
-  # ==========================================================================
-  # Tailscale Sidecar (Optional - exposes API via Tailscale)
-  # ==========================================================================
-  # Uncomment to expose the API on your Tailscale network
-  # Requires: TS_AUTHKEY in environment or ts-services.env file
-  #
-  # tailscale:
-  #   image: docker.io/tailscale/tailscale:latest
-  #   container_name: mail-done-ts
-  #   restart: unless-stopped
-  #   hostname: mail-done-ts
-  #   network_mode: host
-  #   cap_add:
-  #     - NET_ADMIN
-  #     - SYS_MODULE
-  #   volumes:
-  #     - mail-done-ts-state:/var/lib/tailscale
-  #   environment:
-  #     TS_HOSTNAME: ${TS_HOSTNAME:-mail-done}
-  #     TS_STATE_DIR: /var/lib/tailscale
-  #     TS_USERSPACE: "true"
-  #     TS_AUTHKEY: ${TS_AUTHKEY:-}
-  #   entrypoint: ["/bin/sh", "-c"]
-  #   command:
-  #     - |
-  #       /usr/local/bin/containerboot &
-  #       sleep 15
-  #       tailscale serve --bg ${API_PORT:-8000}
-  #       wait
-
 volumes:
   mail-done-db-data:
     name: mail-done-db-data
-  # mail-done-ts-state:
-  #   name: mail-done-ts-state

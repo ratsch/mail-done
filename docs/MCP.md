@@ -137,7 +137,7 @@ Restart Cursor to load the new MCP server.
 
 ### Remote Backend (Self-Hosted Server)
 
-If your backend runs on a remote server (e.g., Raspberry Pi via Tailscale):
+If your backend runs on a remote server (e.g., Raspberry Pi):
 
 ```json
 {
@@ -151,13 +151,6 @@ If your backend runs on a remote server (e.g., Raspberry Pi via Tailscale):
       }
     }
   }
-}
-```
-
-With Tailscale:
-```json
-{
-  "EMAIL_API_URL": "http://mail-done.your-tailnet.ts.net:8000"
 }
 ```
 

@@ -620,7 +620,7 @@ docker exec mail-done-api poetry run alembic upgrade head
 
 - Change default passwords in production
 - Use HTTPS reverse proxy (nginx, Caddy) for external access
-- Consider Tailscale for secure remote access
+- Use a VPN for secure remote access
 - Enable rate limiting in production
 - Keep `DB_ENCRYPTION_KEY` secure and backed up (see warning above)
 
@@ -665,15 +665,6 @@ sudo systemctl enable --now caddy
 ```
 
 Access via: `https://mail-done.yourdomain.com`
-
-## Remote Access with Tailscale
-
-For secure remote access without exposing ports:
-
-1. Install Tailscale on the server
-2. Uncomment the Tailscale sidecar in `docker-compose.pi.yml`
-3. Set `TS_AUTHKEY` in environment
-4. Access via Tailscale hostname: `http://mail-done:8000`
 
 ---
 
