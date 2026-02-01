@@ -104,21 +104,23 @@ def audit_log(tool_name: str, arguments: dict, user_info: str = "local"):
 
 def create_server() -> Server:
     """Create and configure the MCP server."""
-    server = Server("email-search")
+    server = Server("email-and-document-search")
     
     # Tool definitions
     TOOLS = [
         Tool(
             name="semantic_search",
-            description="""Search emails semantically by meaning/concept.
+            description="""[EMAIL] Search emails semantically by meaning/concept.
+
+Searches email body and subject text using vector embeddings.
+Does NOT search document files - use semantic_document_search for files.
 
 **Date Range:**
 - DEFAULT: Last 3 months (90 days) - fast, responsive searches
 - CUSTOM: Specify date_from/date_to for longer ranges
 - HARD LIMIT: Maximum 2 years back (730 days) - cannot be exceeded
 
-Use this to find emails related to a topic or concept, even if they don't contain exact keywords.
-Examples:
+**Examples:**
 - "machine learning papers from collaborators"
 - "grant deadlines and funding opportunities"
 - "PhD applications about genomics"
@@ -165,15 +167,16 @@ Returns email summaries with similarity scores.""",
         ),
         Tool(
             name="search_by_sender",
-            description="""Find emails from a specific sender.
+            description="""[EMAIL] Find emails from a specific sender.
+
+Searches the email database by sender address or name.
 
 **Date Range:**
 - DEFAULT: Last 3 months (90 days) - fast, responsive
 - CUSTOM: Specify date_from/date_to for longer ranges
 - HARD LIMIT: Maximum 2 years back (730 days)
-            
-Search by email address or sender name.
-Examples:
+
+**Examples:**
 - "john.doe@stanford.edu" - exact email match
 - "Stanford" - partial match on domain or name
 - "Yoshua Bengio" - search by name
@@ -209,15 +212,16 @@ Returns emails sorted by date (newest first).""",
         ),
         Tool(
             name="search_by_topic",
-            description="""Search emails by research topic or scientific concept.
-            
-Optimized for finding academic/research-related emails.
-Examples:
+            description="""[EMAIL] Search emails by research topic or scientific concept.
+
+Searches email content using semantic embeddings, optimized for academic/research topics.
+
+**Examples:**
 - "CRISPR gene editing"
 - "reinforcement learning robotics"
 - "single-cell RNA sequencing"
 
-Can filter by categories like PhD applications or speaking invitations.""",
+Can filter by email categories like PhD applications or speaking invitations.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -246,15 +250,17 @@ Can filter by categories like PhD applications or speaking invitations.""",
         ),
         Tool(
             name="find_similar_emails",
-            description="""Find emails similar to a reference email.
-            
+            description="""[EMAIL] Find emails similar to a reference email.
+
 Given an email ID, find other emails with similar content/topic.
-Useful for:
+Uses email embeddings - for similar documents use find_similar_documents.
+
+**Useful for:**
 - "Find other applications like this one"
 - "Show me similar collaboration requests"
 - "Group related correspondence"
 
-Requires an email ID (UUID) from previous search results.""",
+Requires an email ID (UUID) from previous email search results.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -283,16 +289,16 @@ Requires an email ID (UUID) from previous search results.""",
         ),
         Tool(
             name="get_email_details",
-            description="""Get full details of a specific email.
-            
+            description="""[EMAIL] Get full details of a specific email.
+
 Given an email ID, returns the complete email including:
 - Full body text
 - All recipients (to, cc)
-- Attachments info
+- Attachment metadata (names, sizes) - use list_attachments to download
 - AI analysis (category, urgency, action items)
 - For applications: applicant info and scores
 
-Use after searching to get the full content.""",
+Use after email search to get the full content.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -306,16 +312,15 @@ Use after searching to get the full content.""",
         ),
         Tool(
             name="list_categories",
-            description="""List all available email categories with counts.
-            
-Returns categories like:
+            description="""[EMAIL] List all available email categories with counts.
+
+Returns AI-assigned email categories like:
 - application-phd (PhD applications)
 - application-postdoc (Postdoc applications)
 - invitation-speaking (Speaking invitations)
 - collaboration-research (Research collaborations)
-- etc.
 
-Use to understand what categories are available for filtering.""",
+Use to understand what email categories are available for filtering email searches.""",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -324,13 +329,13 @@ Use to understand what categories are available for filtering.""",
         ),
         Tool(
             name="list_top_senders",
-            description="""List top email senders by email count.
-            
-Shows the most frequent senders with:
+            description="""[EMAIL] List top email senders by email count.
+
+Shows the most frequent email senders with:
 - Email address and name
 - Total email count
 - VIP status
-- Typical category
+- Typical email category
 
 Useful for understanding who sends the most emails.""",
             inputSchema={
@@ -346,24 +351,25 @@ Useful for understanding who sends the most emails.""",
             }
         ),
         Tool(
-            name="search_documents",
-            description="""Search indexed documents (files) semantically.
+            name="semantic_document_search",
+            description="""[DOCUMENT] Search indexed document files semantically.
 
-Searches files that have been indexed from folders or email attachments.
-Returns documents matching the query with similarity scores and full location info.
+Searches files (PDFs, Office docs, text files) that have been indexed from:
+- Local folders (scanned directories)
+- Email attachments (if attachment indexing is enabled)
+
+Does NOT search email body text - use semantic_search for emails.
 
 **Returns for each document:**
 - Filename, file type, size
-- Dates: document_date (file date), first_seen_at, last_seen_at
+- Dates: document_date, first_seen_at, last_seen_at
 - Locations: All origins with host name and full path
 - Similarity score
 
 **Examples:**
 - "invoices from 2024"
 - "machine learning papers"
-- "contract renewal terms"
-
-Use this to find files that have been indexed.""",
+- "contract renewal terms" """,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -402,10 +408,10 @@ Use this to find files that have been indexed.""",
             }
         ),
         Tool(
-            name="search_unified",
-            description="""Search across BOTH emails AND documents in a single query.
+            name="semantic_search_unified",
+            description="""[EMAIL+DOCUMENT] Search across BOTH emails AND documents in a single query.
 
-Searches both email text and indexed files, returning merged results ranked by similarity.
+Searches both email body text AND indexed document files, returning merged results ranked by similarity.
 
 **Useful when:**
 - Looking for information that might be in an email OR a file
@@ -455,16 +461,16 @@ Use 'types' param to filter: "all", "email", or "document".""",
         ),
         Tool(
             name="get_document_details",
-            description="""Get full details of a specific document.
+            description="""[DOCUMENT] Get full details of a specific indexed document file.
 
-Given a document ID, returns complete information including:
+Given a document ID, returns complete file information including:
 - Filename, file type, size, page count
 - Dates: document_date (file date), first_seen_at, last_seen_at
 - All locations (origins) with host name and full path
 - Extracted text preview
 - AI category and tags
 
-Use after searching to get full document information.""",
+Use after document search to get full file information.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -477,10 +483,153 @@ Use after searching to get full document information.""",
             }
         ),
         Tool(
-            name="download_document",
-            description="""Download a document file to local cache.
+            name="find_similar_documents",
+            description="""[DOCUMENT] Find document files similar to a reference document.
 
-Retrieves the actual file from its origin (filesystem, SSH, or email attachment).
+Given a document ID, find other indexed files with similar content.
+For similar emails, use find_similar_emails instead.
+
+**Useful for:**
+- "Find other invoices like this one"
+- "Show me similar contracts"
+- "Group related documents"
+
+Requires a document ID (UUID) from previous document search results.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "UUID of the reference document"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of similar documents to find (default: 10)",
+                        "default": 10
+                    },
+                    "same_type_only": {
+                        "type": "boolean",
+                        "description": "Only return documents of same type (default: false)",
+                        "default": False
+                    },
+                    "similarity_threshold": {
+                        "type": "number",
+                        "description": "Minimum similarity score 0-1 (default: 0.5)",
+                        "default": 0.5
+                    }
+                },
+                "required": ["document_id"]
+            }
+        ),
+        Tool(
+            name="search_document_by_name",
+            description="""[DOCUMENT] Search indexed document files by filename.
+
+Find document files by partial or exact filename match.
+Searches only indexed files, not email subjects.
+
+**Examples:**
+- "invoice" - finds all files with "invoice" in name
+- "2024-01" - finds files with "2024-01" in name
+- ".pdf" - finds all PDF files
+
+Returns documents sorted by relevance and date.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Filename or partial filename to search for"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 20)",
+                        "default": 20
+                    },
+                    "mime_type": {
+                        "type": "string",
+                        "description": "Filter by MIME type (e.g., 'application/pdf')"
+                    },
+                    "host": {
+                        "type": "string",
+                        "description": "Filter by origin host (e.g., 'mbp-GR-2', 'nvme-pi')"
+                    }
+                },
+                "required": ["name"]
+            }
+        ),
+        Tool(
+            name="get_document_index_stats",
+            description="""[DOCUMENT] Get document indexing statistics and overview.
+
+Returns aggregate statistics about indexed document files:
+- Total documents indexed
+- Documents by extraction status (completed, pending, failed)
+- Documents by host (which machines have indexed files)
+- Documents by origin type (folder vs email_attachment)
+- OCR statistics (documents needing OCR)
+- Recent indexing activity
+
+**Use this to:**
+- Monitor overall indexing progress
+- Check how many documents need OCR
+- See breakdown by host or origin type""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "Filter stats to a specific host (e.g., 'mbp-GR-2')"
+                    },
+                    "path_prefix": {
+                        "type": "string",
+                        "description": "Filter stats to a path prefix (e.g., '/Users/raetsch/Documents')"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="list_indexed_folder",
+            description="""[DOCUMENT] List contents of a folder on a remote host.
+
+Browses the actual filesystem of an indexed folder and returns its contents.
+**Security:** Only folders that were previously indexed can be browsed.
+
+**Returns for each file:**
+- Filename, size, modification date
+- Whether the file is already indexed
+- Document ID if indexed
+
+**Use this to:**
+- Browse files in a previously indexed folder
+- See which files in a folder are indexed vs not yet indexed
+- Discover new files added since last indexing""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "Host where the folder is located (e.g., 'mbp-GR-2')"
+                    },
+                    "folder_path": {
+                        "type": "string",
+                        "description": "Full path to the folder (e.g., '/Users/raetsch/Documents/Papers')"
+                    },
+                    "include_subfolders": {
+                        "type": "boolean",
+                        "description": "Include files in subfolders (default: false)",
+                        "default": False
+                    }
+                },
+                "required": ["host", "folder_path"]
+            }
+        ),
+        Tool(
+            name="download_document",
+            description="""[DOCUMENT] Download an indexed document file to local cache.
+
+Retrieves the actual file from its origin (filesystem via SSH, or email attachment).
 If primary origin is unavailable, falls back to other origins with same checksum.
 
 **Returns:**
@@ -519,14 +668,14 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true (uses same cache directory).""",
         ),
         Tool(
             name="list_imap_folders",
-            description="""List all folders on the IMAP server.
+            description="""[EMAIL/IMAP] List all email folders on the IMAP server.
 
 Returns the actual folder structure from the mail server, including:
 - INBOX
 - Sent, Drafts, Trash, Archive
 - Custom folders and subfolders
 
-Use this to discover what folders exist before listing emails in a specific folder.""",
+Use this to discover what email folders exist before listing emails.""",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -534,15 +683,15 @@ Use this to discover what folders exist before listing emails in a specific fold
             }
         ),
         Tool(
-            name="get_folder_status",
-            description="""Get folder status (total and unread message counts) efficiently.
+            name="get_imap_folder_status",
+            description="""[EMAIL/IMAP] Get email folder status (message counts) efficiently.
 
 Uses IMAP STATUS command - very fast, no message data is fetched.
 
 **Returns:**
-- total: Total number of messages in folder
-- unseen: Number of unread messages  
-- recent: Number of recent messages (new since last check)
+- total: Total number of emails in folder
+- unseen: Number of unread emails
+- recent: Number of recent emails (new since last check)
 - uidnext: Next UID that will be assigned
 - uidvalidity: UID validity value
 
@@ -569,8 +718,8 @@ Uses IMAP STATUS command - very fast, no message data is fetched.
             }
         ),
         Tool(
-            name="list_folder_emails",
-            description="""List emails currently in a specific IMAP folder.
+            name="list_imap_folder_emails",
+            description="""[EMAIL/IMAP] List emails currently in a specific IMAP folder.
 
 Fetches directly from the IMAP server (not from local database).
 Returns email summaries with:
@@ -587,7 +736,7 @@ Returns email summaries with:
 - limit: Max messages to return (default: 50, max: 500)
 - since_date: Only messages since date (YYYY-MM-DD)
 
-Messages are returned newest first.""",
+Emails are returned newest first.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -610,12 +759,18 @@ Messages are returned newest first.""",
         )
     ]
     
-    # Add attachment tools if enabled
+    # Add email attachment tools if enabled
     if MCP_ENABLE_FILE_DOWNLOADS:
         TOOLS.extend([
             Tool(
                 name="list_attachments",
-                description="List attachments for an email. Returns filename, content_type, size for each attachment.",
+                description="""[EMAIL ATTACHMENT] List attachments for a specific email.
+
+Returns metadata for each attachment: filename, content_type, size.
+These are raw email attachments. If attachment indexing is enabled,
+some attachments may also be searchable via semantic_document_search.
+
+Use download_attachment to retrieve the actual file.""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -629,7 +784,15 @@ Messages are returned newest first.""",
             ),
             Tool(
                 name="download_attachment",
-                description="Download an email attachment to local cache directory. Returns the cached file path and original filename. REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true. Files are cached - if already downloaded, returns existing path without re-downloading. NOTE: Downloaded attachments persist in cache - delete manually if sensitive.",
+                description="""[EMAIL ATTACHMENT] Download an email attachment to local cache.
+
+Downloads a specific attachment from an email by index.
+For indexed document files, use download_document instead.
+
+Files are cached - if already downloaded, returns cached path.
+NOTE: Downloaded attachments persist in cache - delete manually if sensitive.
+
+REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -647,7 +810,12 @@ Messages are returned newest first.""",
             ),
             Tool(
                 name="clear_attachment_cache",
-                description="Clear the attachment cache directory. Optionally clear only files older than specified days. REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true.",
+                description="""[EMAIL ATTACHMENT] Clear the email attachment cache directory.
+
+Clears downloaded email attachments from local cache.
+Optionally clear only files older than specified days.
+
+REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -726,7 +894,7 @@ Messages are returned newest first.""",
                     top_k=arguments.get("top_k", 20)
                 )
             
-            elif name == "search_documents":
+            elif name == "semantic_document_search":
                 result = await client.search_documents(
                     query=arguments["query"],
                     top_k=arguments.get("top_k", 10),
@@ -737,7 +905,7 @@ Messages are returned newest first.""",
                     date_to=arguments.get("date_to")
                 )
 
-            elif name == "search_unified":
+            elif name == "semantic_search_unified":
                 result = await client.search_unified(
                     query=arguments["query"],
                     types=arguments.get("types", "all"),
@@ -750,6 +918,35 @@ Messages are returned newest first.""",
             elif name == "get_document_details":
                 result = await client.get_document_details(
                     document_id=arguments["document_id"]
+                )
+
+            elif name == "find_similar_documents":
+                result = await client.find_similar_documents(
+                    document_id=arguments["document_id"],
+                    top_k=arguments.get("top_k", 10),
+                    same_type_only=arguments.get("same_type_only", False),
+                    similarity_threshold=arguments.get("similarity_threshold", 0.5)
+                )
+
+            elif name == "search_document_by_name":
+                result = await client.search_document_by_name(
+                    name=arguments["name"],
+                    top_k=arguments.get("top_k", 20),
+                    mime_type=arguments.get("mime_type"),
+                    host=arguments.get("host")
+                )
+
+            elif name == "get_document_index_stats":
+                result = await client.get_document_index_stats(
+                    host=arguments.get("host"),
+                    path_prefix=arguments.get("path_prefix")
+                )
+
+            elif name == "list_indexed_folder":
+                result = await client.list_indexed_folder(
+                    host=arguments["host"],
+                    folder_path=arguments["folder_path"],
+                    include_subfolders=arguments.get("include_subfolders", False)
                 )
 
             elif name == "download_document":
@@ -787,12 +984,12 @@ Messages are returned newest first.""",
             elif name == "list_imap_folders":
                 result = await client.list_imap_folders()
             
-            elif name == "get_folder_status":
+            elif name == "get_imap_folder_status":
                 result = await client.get_folder_status(
                     folder=arguments["folder"]
                 )
-            
-            elif name == "list_folder_emails":
+
+            elif name == "list_imap_folder_emails":
                 result = await client.list_folder_emails(
                     folder=arguments["folder"],
                     limit=arguments.get("limit", 50),

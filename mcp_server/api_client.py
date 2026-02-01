@@ -1005,6 +1005,121 @@ class EmailAPIClient:
             return self._transform_document_detail(result)
         return result
 
+    async def find_similar_documents(
+        self,
+        document_id: str,
+        top_k: int = 10,
+        same_type_only: bool = False,
+        similarity_threshold: float = 0.5,
+    ) -> Dict[str, Any]:
+        """
+        Find documents similar to a reference document.
+
+        Calls: GET /api/documents/{document_id}/similar
+
+        Returns list of similar documents with similarity scores.
+        """
+        params = {
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+        }
+        if same_type_only:
+            params["same_type_only"] = "true"
+
+        result = await self._request(
+            "GET",
+            f"/api/documents/{document_id}/similar",
+            params=params
+        )
+
+        if "error" not in result and "results" in result:
+            transformed_results = [
+                self._transform_document_result(r) for r in result["results"]
+            ]
+            return {
+                "reference_document_id": document_id,
+                "total": len(transformed_results),
+                "results": transformed_results
+            }
+        return result
+
+    async def search_document_by_name(
+        self,
+        name: str,
+        top_k: int = 20,
+        mime_type: Optional[str] = None,
+        host: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Search documents by filename.
+
+        Calls: GET /api/documents/search/by-name
+
+        Returns documents matching the filename pattern.
+        """
+        params = {
+            "name": name,
+            "limit": top_k,
+        }
+        if mime_type:
+            params["mime_type"] = mime_type
+        if host:
+            params["host"] = host
+
+        result = await self._request("GET", "/api/documents/search/by-name", params=params)
+
+        if "error" not in result and "results" in result:
+            transformed_results = [
+                self._transform_document_result({"document": r}) for r in result["results"]
+            ]
+            return {
+                "query": name,
+                "total": len(transformed_results),
+                "results": transformed_results
+            }
+        return result
+
+    async def get_document_index_stats(
+        self,
+        host: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get document indexing statistics.
+
+        Calls: GET /api/documents/status
+
+        Returns aggregate statistics about indexed documents.
+        """
+        params = {}
+        if host:
+            params["host"] = host
+        if path_prefix:
+            params["path_prefix"] = path_prefix
+
+        return await self._request("GET", "/api/documents/status", params=params)
+
+    async def list_indexed_folder(
+        self,
+        host: str,
+        folder_path: str,
+        include_subfolders: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        List contents of an indexed folder on a remote host.
+
+        Calls: GET /api/documents/folders/list
+
+        Returns directory listing with indexing status for each file.
+        """
+        params = {
+            "host": host,
+            "folder_path": folder_path,
+            "include_subfolders": str(include_subfolders).lower(),
+        }
+
+        return await self._request("GET", "/api/documents/folders/list", params=params)
+
     def _transform_document_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Transform API document search result to MCP format with origins."""
         doc = result.get("document", {})
