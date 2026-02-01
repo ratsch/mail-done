@@ -463,6 +463,7 @@ function formatTimeAgo(timestamp) {
 
 async function performSearch() {
     const query = document.getElementById('search-query').value.trim();
+    const searchType = document.getElementById('search-type').value;
     const mode = document.getElementById('search-mode').value;
     const limit = parseInt(document.getElementById('search-limit').value);
     const thresholdInput = document.getElementById('search-threshold').value;
@@ -471,39 +472,55 @@ async function performSearch() {
     const dateRange = document.getElementById('search-date-range').value;
     const resultsEl = document.getElementById('search-results');
     const searchButton = document.getElementById('search-button');
-    
+
     if (!query) {
         showError(resultsEl, 'Please enter a search query');
         return;
     }
-    
+
     // Hide search history dropdown
     hideSearchHistory();
-    
+
     // Save to search history
     saveSearchToHistory(query);
-    
+
     // Show loading
     searchButton.disabled = true;
     searchButton.textContent = 'Searching...';
     resultsEl.innerHTML = '<div class="loading">Searching</div>';
-    
+
     try {
         // Build URL with proper threshold (use 0.01 instead of 0 to avoid filtering all results)
         const effectiveThreshold = threshold === 0 ? 0.01 : threshold;
-        let url = `${API_BASE}/api/search/simple?q=${encodeURIComponent(query)}&mode=${mode}&limit=${limit}&similarity_threshold=${effectiveThreshold}`;
-        
-        // Add account filter if selected
-        if (selectedAccount) {
-            url += `&account=${encodeURIComponent(selectedAccount)}`;
+
+        // Use unified search for document or all types, simple search for email-only
+        let url;
+        let isUnifiedSearch = (searchType === 'document' || searchType === 'all');
+
+        if (isUnifiedSearch) {
+            // Use unified search endpoint
+            url = `${API_BASE}/api/search/unified?q=${encodeURIComponent(query)}&types=${searchType}&limit=${limit}&similarity_threshold=${effectiveThreshold}`;
+
+            // Add account filter as email_account for unified search
+            if (selectedAccount) {
+                url += `&email_account=${encodeURIComponent(selectedAccount)}`;
+            }
+        } else {
+            // Use simple search for emails only (supports hybrid/keyword modes)
+            url = `${API_BASE}/api/search/simple?q=${encodeURIComponent(query)}&mode=${mode}&limit=${limit}&similarity_threshold=${effectiveThreshold}`;
+
+            // Add account filter
+            if (selectedAccount) {
+                url += `&account=${encodeURIComponent(selectedAccount)}`;
+            }
+
+            // Add exclude_handled if checkbox is checked
+            if (hideHandled) {
+                url += '&exclude_handled=true';
+            }
         }
-        
-        // Add exclude_handled if checkbox is checked
-        if (hideHandled) {
-            url += '&exclude_handled=true';
-        }
-        
-        // Add date range filters
+
+        // Add date range filters (both endpoints support these)
         if (dateRange !== 'all') {
             if (dateRange === 'custom') {
                 const dateFrom = document.getElementById('search-date-from').value;
@@ -522,19 +539,25 @@ async function performSearch() {
                 url += `&date_from=${encodeURIComponent(dateFrom.toISOString().split('T')[0])}`;
             }
         }
-        
+
         console.log('Search URL:', url);
         const response = await fetch(url, FETCH_OPTIONS);
-        
+
         if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`Search failed (${response.status}): ${errorText}`);
         }
-        
+
         const data = await response.json();
         console.log('Search results:', data);
-        displaySearchResults(data, resultsEl);
-        
+
+        // Use appropriate display function based on search type
+        if (isUnifiedSearch) {
+            displayUnifiedSearchResults(data, resultsEl);
+        } else {
+            displaySearchResults(data, resultsEl);
+        }
+
     } catch (error) {
         console.error('Search error:', error);
         showError(resultsEl, `Search failed: ${error.message}`);
@@ -589,6 +612,191 @@ function displaySearchResults(data, container) {
         </div>
         ${resultsHtml}
     `;
+}
+
+// Display unified search results (emails + files)
+function displayUnifiedSearchResults(data, container) {
+    console.log('Display unified results - raw data:', data);
+
+    if (!data.results || data.results.length === 0) {
+        container.innerHTML = `
+            <div class="error-message">
+                <strong>No results found.</strong><br>
+                <br>
+                Try adjusting your search:<br>
+                • Lower the similarity threshold (try 0.3)<br>
+                • Search in "All" instead of just emails or documents<br>
+                • Try broader search terms<br>
+            </div>
+        `;
+        return;
+    }
+
+    // Sort results by similarity descending (highest first)
+    const sortedResults = [...data.results].sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+    // Count by type
+    const emailCount = sortedResults.filter(r => r.result_type === 'email').length;
+    const fileCount = sortedResults.filter(r => r.result_type === 'document').length;
+
+    const resultsHtml = sortedResults.map((result, index) => {
+        const similarity = result.similarity || 0;
+
+        // Highlight top 3 results
+        const isTopResult = index < 3;
+        const topBadge = isTopResult ? `<span class="top-badge">Top ${index + 1}</span>` : '';
+
+        if (result.result_type === 'email' && result.email) {
+            return renderEmailItem(result.email, index, `unified-email-${index}`, similarity, topBadge, false);
+        } else if (result.result_type === 'document' && result.document) {
+            return renderDocumentItem(result.document, index, similarity, topBadge);
+        }
+        return '';
+    }).join('');
+
+    // Show stats about results
+    const avgScore = sortedResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / sortedResults.length;
+    const topScore = sortedResults[0]?.similarity || 0;
+
+    // Build type summary
+    let typeSummary = '';
+    if (emailCount > 0 && fileCount > 0) {
+        typeSummary = `(${emailCount} emails, ${fileCount} files)`;
+    } else if (emailCount > 0) {
+        typeSummary = `(${emailCount} emails)`;
+    } else if (fileCount > 0) {
+        typeSummary = `(${fileCount} files)`;
+    }
+
+    container.innerHTML = `
+        <div class="success-message">
+            Found ${data.total || data.results.length} results for "${escapeHtml(data.query)}" ${typeSummary}
+            <br>
+            <small>Top similarity: ${(topScore * 100).toFixed(1)}% | Average: ${(avgScore * 100).toFixed(1)}%</small>
+        </div>
+        ${resultsHtml}
+    `;
+}
+
+// Render a document search result item
+function renderDocumentItem(doc, index, similarity, scoreBadge = '') {
+    const docId = `doc-${index}`;
+
+    // Get document info
+    const title = doc.title || doc.original_filename || doc.filename || 'Untitled Document';
+    const docType = doc.document_type || doc.mime_type || 'document';
+    const summary = doc.summary || '';
+    const previewText = doc.extracted_text_preview || summary || '';
+    const previewShort = previewText.length > 200 ? previewText.substring(0, 200) + '...' : previewText;
+
+    // Get origin info
+    const origins = doc.origins || [];
+    const primaryOrigin = origins[0] || {};
+    const originPath = primaryOrigin.origin_path || '';
+    const originHost = primaryOrigin.origin_host || '';
+    const filename = originPath.split('/').pop() || title;
+
+    // Format file size
+    const fileSize = doc.file_size ? formatFileSize(doc.file_size) : '';
+
+    // Document type icon
+    const typeIcon = getDocumentTypeIcon(docType, doc.mime_type);
+
+    const isTopResult = scoreBadge && scoreBadge.includes('Top');
+
+    return `
+        <div class="email-list-item document-item expandable ${isTopResult ? 'top-result' : ''}" id="doc-item-${doc.id}" data-doc-id="${doc.id}">
+            <div class="email-list-header" onclick="toggleDocDetails('${docId}')">
+                <div class="email-list-subject">
+                    <span class="expand-icon" id="${docId}-icon">▶</span>
+                    ${typeIcon} ${escapeHtml(title)}
+                    ${scoreBadge ? `<span style="margin-left: 10px;">${scoreBadge}</span>` : ''}
+                </div>
+                <div class="email-list-date">${doc.first_seen_at ? formatDate(doc.first_seen_at) : (doc.created_at ? formatDate(doc.created_at) : '')}</div>
+            </div>
+            <div class="result-score" style="display: inline-block; margin-bottom: 8px;">${(similarity * 100).toFixed(1)}%</div>
+            <div class="email-list-from" onclick="toggleDocDetails('${docId}')">📁 ${escapeHtml(filename)}${fileSize ? ` (${fileSize})` : ''}</div>
+            ${previewShort ? `
+                <div class="email-list-preview" onclick="toggleDocDetails('${docId}')">${escapeHtml(previewShort)}</div>
+            ` : ''}
+            <div class="result-tags" style="margin-top: 10px;">
+                <span class="tag" style="background: #8b5cf6; color: white;">📄 File</span>
+                ${docType ? `<span class="tag">${escapeHtml(docType)}</span>` : ''}
+                ${originHost ? `<span class="tag" style="background: #10b981; color: white;">🖥️ ${escapeHtml(originHost)}</span>` : ''}
+                ${doc.ai_category ? `<span class="tag">${escapeHtml(doc.ai_category)}</span>` : ''}
+                ${doc.extraction_quality ? `<span class="tag">Quality: ${(doc.extraction_quality * 100).toFixed(0)}%</span>` : ''}
+            </div>
+
+            <div id="${docId}-details" class="email-details" style="display: none;">
+                <div class="email-body">
+                    ${summary ? `<p><strong>Summary:</strong> ${escapeHtml(summary)}</p>` : ''}
+                    <p><strong>Dates:</strong></p>
+                    <ul style="margin: 5px 0 10px 20px; padding: 0;">
+                        ${doc.document_date ? `<li>File date: ${formatDate(doc.document_date)}</li>` : ''}
+                        <li>First seen: ${doc.first_seen_at ? formatDate(doc.first_seen_at) : 'Unknown'}</li>
+                        <li>Last seen: ${doc.last_seen_at ? formatDate(doc.last_seen_at) : 'Unknown'}</li>
+                    </ul>
+                    <p><strong>Locations (${origins.length}):</strong></p>
+                    <ul style="margin: 5px 0 10px 20px; padding: 0;">
+                        ${origins.map(o => {
+                            const fullPath = o.origin_path || '';
+                            const canOpenInFinder = fullPath.startsWith('/');
+                            const finderUrl = canOpenInFinder ? `file://${encodeURI(fullPath)}` : '';
+                            const modifiedAt = o.file_modified_at ? formatDate(o.file_modified_at) : '';
+                            return `<li style="margin-bottom: 6px;">
+                                ${o.origin_host ? `<strong>${escapeHtml(o.origin_host)}</strong>: ` : ''}
+                                <code>${escapeHtml(fullPath || o.origin_filename || 'Unknown')}</code>
+                                ${canOpenInFinder ? `<a href="${finderUrl}" class="btn-small" style="margin-left: 8px; padding: 2px 8px; font-size: 11px;" title="Open in Finder">📂 Open</a>` : ''}
+                                ${modifiedAt ? `<br><span style="color: #666; font-size: 0.9em; margin-left: 20px;">Last edited: ${modifiedAt}</span>` : ''}
+                            </li>`;
+                        }).join('')}
+                    </ul>
+                    ${doc.checksum ? `<p><strong>Checksum:</strong> <code>${escapeHtml(doc.checksum.substring(0, 16))}...</code></p>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// Toggle document details expansion
+function toggleDocDetails(docId) {
+    const detailsEl = document.getElementById(`${docId}-details`);
+    const iconEl = document.getElementById(`${docId}-icon`);
+
+    if (detailsEl.style.display === 'none') {
+        detailsEl.style.display = 'block';
+        iconEl.textContent = '▼';
+    } else {
+        detailsEl.style.display = 'none';
+        iconEl.textContent = '▶';
+    }
+}
+
+// Get icon for document type
+function getDocumentTypeIcon(docType, mimeType) {
+    const type = (docType || mimeType || '').toLowerCase();
+    if (type.includes('pdf')) return '📕';
+    if (type.includes('word') || type.includes('doc')) return '📘';
+    if (type.includes('excel') || type.includes('sheet') || type.includes('xls')) return '📗';
+    if (type.includes('powerpoint') || type.includes('presentation') || type.includes('ppt')) return '📙';
+    if (type.includes('image') || type.includes('png') || type.includes('jpg') || type.includes('jpeg')) return '🖼️';
+    if (type.includes('text') || type.includes('txt')) return '📝';
+    if (type.includes('csv')) return '📊';
+    if (type.includes('zip') || type.includes('archive')) return '📦';
+    return '📄';
+}
+
+// Format file size
+function formatFileSize(bytes) {
+    if (!bytes || bytes === 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let unitIndex = 0;
+    let size = bytes;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+    }
+    return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
 // Reusable email item renderer
@@ -1677,12 +1885,15 @@ function escapeHtml(text) {
 
 function formatDate(dateString) {
     if (!dateString) return 'Unknown date';
-    
+
     const date = new Date(dateString);
     const now = new Date();
-    const diffMs = now - date;
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
+
+    // Compare by calendar date (ignoring time)
+    const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const nowOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round((nowOnly - dateOnly) / (1000 * 60 * 60 * 24));
+
     if (diffDays === 0) {
         return 'Today';
     } else if (diffDays === 1) {

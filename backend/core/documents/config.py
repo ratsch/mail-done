@@ -11,12 +11,36 @@ Configuration is loaded from config/document_hosts.yaml.
 
 import os
 import logging
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def _get_stable_machine_id() -> str:
+    """
+    Get a stable, SSH-accessible machine identifier.
+
+    Uses LOCAL_MACHINE_NAME environment variable if set, otherwise falls back
+    to socket.gethostname(). Set LOCAL_MACHINE_NAME to your preferred
+    SSH-accessible hostname (e.g., Tailscale name).
+
+    Returns a hostname suitable for SSH access and document retrieval.
+    """
+    # Check for user-configured machine name
+    env_name = os.getenv("LOCAL_MACHINE_NAME")
+    if env_name:
+        return env_name
+
+    # Fallback to hostname
+    hostname = socket.gethostname()
+    # Clean up hostname (remove .local suffix on macOS)
+    if hostname.endswith(".local"):
+        hostname = hostname[:-6]
+    return hostname
 
 # Config directory (same as other config files)
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "config"))
@@ -133,12 +157,16 @@ class HostConfigManager:
         config_path = CONFIG_DIR / "document_hosts.yaml"
 
         if not config_path.exists():
-            logger.warning(f"No host config found at {config_path}. Using localhost only.")
-            self._configs["localhost"] = HostConfig(
-                name="localhost",
+            hostname = _get_stable_machine_id()
+            logger.debug(f"No host config at {config_path}, using hostname '{hostname}'")
+            # Use actual hostname for local origins, with "localhost" as alias
+            self._configs[hostname] = HostConfig(
+                name=hostname,
                 type="local",
                 mount_point="/"
             )
+            # Also register under "localhost" alias for backward compatibility
+            self._configs["localhost"] = self._configs[hostname]
             return
 
         try:
@@ -146,12 +174,14 @@ class HostConfigManager:
                 data = yaml.safe_load(f)
 
             if not data or "hosts" not in data:
-                logger.warning("Invalid host config file. Using localhost only.")
-                self._configs["localhost"] = HostConfig(
-                    name="localhost",
+                hostname = _get_stable_machine_id()
+                logger.warning(f"Invalid host config file (missing 'hosts' key), using hostname '{hostname}'")
+                self._configs[hostname] = HostConfig(
+                    name=hostname,
                     type="local",
                     mount_point="/"
                 )
+                self._configs["localhost"] = self._configs[hostname]
                 return
 
             for host_data in data.get("hosts", []):
@@ -164,11 +194,13 @@ class HostConfigManager:
 
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse host config: {e}")
-            self._configs["localhost"] = HostConfig(
-                name="localhost",
+            hostname = _get_stable_machine_id()
+            self._configs[hostname] = HostConfig(
+                name=hostname,
                 type="local",
                 mount_point="/"
             )
+            self._configs["localhost"] = self._configs[hostname]
 
     def get_host(self, name: str) -> Optional[HostConfig]:
         """Get host configuration by name."""

@@ -790,6 +790,21 @@ header .subtitle {
     font-weight: 600;
 }
 
+/* Document items in search results */
+.document-item {
+    border-left-color: #8b5cf6 !important;
+}
+
+.document-item.top-result {
+    background: linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%) !important;
+    border-left: 4px solid #8b5cf6 !important;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2) !important;
+}
+
+.document-item:hover {
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
+}
+
 .floating-success {
     position: absolute;
     top: 50%;

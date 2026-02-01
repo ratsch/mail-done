@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -50,6 +51,10 @@ def setup_logging(verbose: bool = False, quiet: bool = False):
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+# Default document extensions for indexing
+DEFAULT_EXTENSIONS = ['pdf', 'docx', 'xlsx', 'pptx', 'doc', 'ppt', 'xls', 'csv', 'txt', 'md']
 
 
 def parse_extensions(extensions_str: str) -> list[str]:
@@ -97,8 +102,10 @@ async def scan_folder(args):
     host_config = get_host_config(args.host)
     if not host_config:
         if args.host == "localhost":
+            # Use actual hostname instead of "localhost"
+            actual_hostname = socket.gethostname()
             host_config = HostConfig(
-                name="localhost",
+                name=actual_hostname,
                 type="local",
                 mount_point="/",
             )
@@ -107,8 +114,13 @@ async def scan_folder(args):
             logger.error("Configure hosts in config/document_hosts.yaml")
             return 1
 
-    # Build extensions list
-    extensions = parse_extensions(args.extensions) if args.extensions else None
+    # Build extensions list (use defaults unless --all-extensions specified)
+    if args.all_extensions:
+        extensions = None  # No filter - all file types
+    elif args.extensions:
+        extensions = parse_extensions(args.extensions)
+    else:
+        extensions = DEFAULT_EXTENSIONS
 
     # Build exclude patterns
     exclude_patterns = parse_exclude(args.exclude) if args.exclude else None
@@ -126,7 +138,9 @@ async def scan_folder(args):
 
     # Create scanner with cache if specified
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
-    scanner = create_scanner(repo, cache_dir)
+    generate_embeddings = not args.skip_embeddings
+    single_embedding = not args.per_page_embeddings
+    scanner = create_scanner(repo, cache_dir, generate_embeddings=generate_embeddings, single_embedding=single_embedding)
 
     # Progress callback
     last_report_time = datetime.now()
@@ -146,11 +160,14 @@ async def scan_folder(args):
             logger.debug(f"Processing: {file_info.path}")
 
     # Run scan
-    logger.info(f"Scanning {args.path} on {args.host}")
+    logger.info(f"Scanning {args.path} on {host_config.name}")
     logger.info(f"Recursive: {args.recursive}, Extensions: {extensions or 'all'}")
 
     if args.dry_run:
         logger.info("DRY RUN - no changes will be made")
+
+    if args.reindex:
+        logger.info("REINDEX MODE - will re-extract and re-embed existing documents")
 
     extract_text = not getattr(args, 'no_extract', False)
     if extract_text:
@@ -158,12 +175,21 @@ async def scan_folder(args):
     else:
         logger.info("Text extraction: DISABLED (documents queued for later)")
 
+    if not args.skip_embeddings:
+        if args.per_page_embeddings:
+            logger.info("Embedding generation: ENABLED (per-page/per-sheet mode)")
+        else:
+            logger.info("Embedding generation: ENABLED (single embedding per document)")
+    else:
+        logger.info("Embedding generation: DISABLED")
+
     result = await scanner.scan(
         config=scan_config,
         limit=args.limit,
         dry_run=args.dry_run,
         extract_text=extract_text,
         progress_callback=progress_callback if not args.quiet else None,
+        reindex=args.reindex,
     )
 
     # Commit changes
@@ -207,7 +233,8 @@ async def detect_deleted(args):
     host_config = get_host_config(args.host)
     if not host_config:
         if args.host == "localhost":
-            host_config = HostConfig(name="localhost", type="local", mount_point="/")
+            actual_hostname = socket.gethostname()
+            host_config = HostConfig(name=actual_hostname, type="local", mount_point="/")
         else:
             logger.error(f"Unknown host: {args.host}")
             return 1
@@ -240,9 +267,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s ~/Documents                          # Scan home Documents folder
+  %(prog)s ~/Documents                          # Scan Documents (default: pdf,docx,xlsx,etc.)
   %(prog)s /mnt/nas/docs --host nas            # Scan NAS mount
-  %(prog)s /data --extensions pdf,docx --limit 100
+  %(prog)s /data --extensions py,js,ts         # Override: only code files
+  %(prog)s /data --all-extensions              # Include ALL file types
   %(prog)s /archive --recursive --dry-run      # Preview what would be indexed
   %(prog)s /data --detect-deleted              # Find and mark deleted files
         """
@@ -279,7 +307,12 @@ Examples:
     parser.add_argument(
         "--extensions", "-e",
         type=str,
-        help="Comma-separated list of extensions to include (e.g., pdf,docx,xlsx)",
+        help=f"Comma-separated list of extensions to include (default: {','.join(DEFAULT_EXTENSIONS)})",
+    )
+    parser.add_argument(
+        "--all-extensions",
+        action="store_true",
+        help="Include all file types (override default document extensions filter)",
     )
     parser.add_argument(
         "--exclude", "-x",
@@ -313,6 +346,21 @@ Examples:
         "--no-extract",
         action="store_true",
         help="Skip text extraction (only register documents, queue for later extraction)",
+    )
+    parser.add_argument(
+        "--skip-embeddings",
+        action="store_true",
+        help="Skip embedding generation (embeddings are generated by default)",
+    )
+    parser.add_argument(
+        "--per-page-embeddings",
+        action="store_true",
+        help="Generate per-page/per-sheet embeddings for multi-page documents (default: single embedding per document)",
+    )
+    parser.add_argument(
+        "--reindex",
+        action="store_true",
+        help="Re-extract text and regenerate embeddings for already indexed documents",
     )
     parser.add_argument(
         "--detect-deleted",

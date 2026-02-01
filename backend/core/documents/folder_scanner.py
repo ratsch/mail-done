@@ -51,7 +51,9 @@ class ScanResult:
     files_processed: int = 0
     new_documents: int = 0
     duplicate_documents: int = 0
+    reindexed: int = 0
     texts_extracted: int = 0
+    embeddings_generated: int = 0
     skipped_unchanged: int = 0
     skipped_too_large: int = 0
     skipped_excluded: int = 0
@@ -73,8 +75,12 @@ class ScanResult:
             f"  New documents: {self.new_documents}",
             f"  Duplicates: {self.duplicate_documents}",
         ]
+        if self.reindexed > 0:
+            lines.append(f"  Reindexed: {self.reindexed}")
         if self.texts_extracted > 0:
             lines.append(f"  Texts extracted: {self.texts_extracted}")
+        if self.embeddings_generated > 0:
+            lines.append(f"  Embeddings generated: {self.embeddings_generated}")
         lines.extend([
             f"  Skipped (unchanged): {self.skipped_unchanged}",
             f"  Skipped (too large): {self.skipped_too_large}",
@@ -202,6 +208,7 @@ class FolderScanner:
         self,
         processor: DocumentProcessor,
         cache: Optional[ScanCache] = None,
+        embedding_service: Optional["DocumentEmbeddingService"] = None,
     ):
         """
         Initialize folder scanner.
@@ -209,9 +216,11 @@ class FolderScanner:
         Args:
             processor: DocumentProcessor for registering documents
             cache: Optional ScanCache for incremental scanning
+            embedding_service: Optional embedding service for generating embeddings inline
         """
         self.processor = processor
         self.cache = cache
+        self.embedding_service = embedding_service
 
     def discover_files(
         self,
@@ -322,6 +331,7 @@ class FolderScanner:
         dry_run: bool = False,
         extract_text: bool = True,
         progress_callback: Optional[callable] = None,
+        reindex: bool = False,
     ) -> ScanResult:
         """
         Scan a folder and register discovered documents.
@@ -332,6 +342,7 @@ class FolderScanner:
             dry_run: If True, don't actually register documents
             extract_text: If True, extract text from documents immediately (default: True)
             progress_callback: Optional callback(file_info, result) for progress
+            reindex: If True, re-extract text and regenerate embeddings for existing documents
 
         Returns:
             ScanResult with scan statistics
@@ -341,6 +352,7 @@ class FolderScanner:
 
         result = ScanResult()
         processed_count = 0
+        reindexed_document_ids = set()  # Track already reindexed documents to avoid duplicates
 
         for file_info in self.discover_files(config):
             result.total_files_found += 1
@@ -349,8 +361,8 @@ class FolderScanner:
             if limit and processed_count >= limit:
                 break
 
-            # Check if file changed (incremental scan)
-            if self.cache and not self.cache.should_process(file_info):
+            # Check if file changed (incremental scan) - skip check if reindexing
+            if not reindex and self.cache and not self.cache.should_process(file_info):
                 result.skipped_unchanged += 1
                 continue
 
@@ -397,6 +409,25 @@ class FolderScanner:
                             with open(file_info.path, 'rb') as f:
                                 file_content = f.read()
 
+                            # Analyze content for OCR detection
+                            from backend.core.documents.content_analyzer import analyze_content
+                            content_analysis = analyze_content(
+                                file_content,
+                                mime_type,
+                                filename=file_info.path.name,
+                            )
+
+                            # Update content analysis fields
+                            await self.processor.repository.update_content_analysis(
+                                document_id=document.id,
+                                has_images=content_analysis.has_images,
+                                has_native_text=content_analysis.has_native_text,
+                                is_image_only=content_analysis.is_image_only,
+                                is_scanned_with_ocr=content_analysis.is_scanned_with_ocr,
+                                ocr_recommended=content_analysis.ocr_recommended,
+                                text_source='native' if content_analysis.has_native_text else 'none',
+                            )
+
                             # Use structured extraction for multi-page/multi-sheet documents
                             extraction_result = await self.processor.extract_with_structure(
                                 document=document,
@@ -431,6 +462,21 @@ class FolderScanner:
                                         logger.debug(f"Extracted {len(extraction_result.sections)} sections from {file_info.path.name}")
                                 else:
                                     logger.debug(f"Extracted {len(extraction_result.text)} chars from {file_info.path.name}")
+
+                                # Generate embedding inline if service provided
+                                if self.embedding_service:
+                                    try:
+                                        # Reload document to get updated extraction data
+                                        doc_for_embed = await self.processor.repository.get_by_id(document.id)
+                                        if doc_for_embed:
+                                            embed_result = await self.embedding_service.generate_document_embedding(
+                                                doc_for_embed,
+                                                single_embedding=self.embedding_service.single_embedding,
+                                            )
+                                            result.embeddings_generated += embed_result.embeddings_created
+                                            logger.info(f"Generated {embed_result.embeddings_created} embeddings for {file_info.path.name}")
+                                    except Exception as e:
+                                        logger.warning(f"Embedding generation failed for {file_info.path.name}: {e}")
                             else:
                                 # No text extracted (binary file, unsupported format, etc.)
                                 await self.processor.repository.update_extraction(
@@ -442,15 +488,99 @@ class FolderScanner:
                                 )
                         except Exception as e:
                             logger.warning(f"Text extraction failed for {file_info.path.name}: {e}")
-                            await self.processor.repository.update_extraction(
-                                document_id=document.id,
-                                extracted_text=None,
-                                extraction_status=ExtractionStatus.FAILED,
-                                extraction_method="error",
-                                extraction_quality=0.0,
-                            )
+                            # Rollback to recover session after database errors
+                            try:
+                                self.processor.repository.db.rollback()
+                            except Exception:
+                                pass
+                            try:
+                                await self.processor.repository.update_extraction(
+                                    document_id=document.id,
+                                    extracted_text=None,
+                                    extraction_status=ExtractionStatus.FAILED,
+                                    extraction_method="error",
+                                    extraction_quality=0.0,
+                                )
+                            except Exception:
+                                pass
                 else:
                     result.duplicate_documents += 1
+
+                    # Reindex existing document if requested (skip if already reindexed this session)
+                    if reindex and extract_text and document.id not in reindexed_document_ids:
+                        result.reindexed += 1
+                        try:
+                            with open(file_info.path, 'rb') as f:
+                                file_content = f.read()
+
+                            # Analyze content for OCR detection
+                            from backend.core.documents.content_analyzer import analyze_content
+                            content_analysis = analyze_content(
+                                file_content,
+                                mime_type,
+                                filename=file_info.path.name,
+                            )
+
+                            # Update content analysis fields
+                            await self.processor.repository.update_content_analysis(
+                                document_id=document.id,
+                                has_images=content_analysis.has_images,
+                                has_native_text=content_analysis.has_native_text,
+                                is_image_only=content_analysis.is_image_only,
+                                is_scanned_with_ocr=content_analysis.is_scanned_with_ocr,
+                                ocr_recommended=content_analysis.ocr_recommended,
+                                text_source='native' if content_analysis.has_native_text else 'none',
+                            )
+
+                            extraction_result = await self.processor.extract_with_structure(
+                                document=document,
+                                file_content=file_content,
+                            )
+
+                            if extraction_result.text:
+                                await self.processor.repository.update_extraction(
+                                    document_id=document.id,
+                                    extracted_text=extraction_result.text,
+                                    extraction_status=ExtractionStatus.COMPLETED,
+                                    extraction_method=extraction_result.method,
+                                    extraction_quality=extraction_result.quality_score,
+                                    page_count=extraction_result.page_count,
+                                )
+                                result.texts_extracted += 1
+
+                                if extraction_result.has_structure:
+                                    await self.processor.repository.store_extraction_structure(
+                                        document_id=document.id,
+                                        pages=extraction_result.pages,
+                                        sheets=extraction_result.sheets,
+                                        sections=extraction_result.sections,
+                                    )
+
+                                # Regenerate embeddings
+                                if self.embedding_service:
+                                    try:
+                                        # Delete old embeddings first
+                                        await self.processor.repository.delete_embeddings(document.id)
+                                        doc_for_embed = await self.processor.repository.get_by_id(document.id)
+                                        if doc_for_embed:
+                                            embed_result = await self.embedding_service.generate_document_embedding(
+                                                doc_for_embed,
+                                                single_embedding=self.embedding_service.single_embedding,
+                                            )
+                                            result.embeddings_generated += embed_result.embeddings_created
+                                            logger.info(f"Reindexed {file_info.path.name}: {embed_result.embeddings_created} embeddings")
+                                    except Exception as e:
+                                        logger.warning(f"Embedding regeneration failed for {file_info.path.name}: {e}")
+
+                                # Mark document as reindexed to avoid re-processing copies
+                                reindexed_document_ids.add(document.id)
+                        except Exception as e:
+                            logger.warning(f"Reindex failed for {file_info.path.name}: {e}")
+                            # Rollback to recover session after database errors
+                            try:
+                                self.processor.repository.db.rollback()
+                            except Exception:
+                                pass
 
                 result.files_processed += 1
                 processed_count += 1
@@ -467,6 +597,11 @@ class FolderScanner:
             except Exception as e:
                 result.add_error(str(file_info.path), str(e))
                 logger.error(f"Error processing {file_info.path}: {e}")
+                # Rollback to recover from database errors (e.g., null character in JSON)
+                try:
+                    self.processor.repository.db.rollback()
+                except Exception:
+                    pass
 
         # Save cache
         if self.cache:
@@ -536,6 +671,8 @@ class FolderScanner:
 def create_scanner(
     repository: DocumentRepository,
     cache_dir: Optional[Path] = None,
+    generate_embeddings: bool = True,
+    single_embedding: bool = True,
 ) -> FolderScanner:
     """
     Create a folder scanner with appropriate cache.
@@ -543,6 +680,9 @@ def create_scanner(
     Args:
         repository: Document repository
         cache_dir: Directory for scan caches (default: .scan_cache in cwd)
+        generate_embeddings: Whether to generate embeddings inline (default: True)
+        single_embedding: If True, generate only one embedding per document (default: True)
+                         If False, generate per-page/per-sheet embeddings for multi-page docs
 
     Returns:
         Configured FolderScanner
@@ -554,4 +694,9 @@ def create_scanner(
         cache_path = cache_dir / "scan_cache.json"
         cache = ScanCache(cache_path)
 
-    return FolderScanner(processor, cache)
+    embedding_service = None
+    if generate_embeddings:
+        from backend.core.documents.embeddings import DocumentEmbeddingService
+        embedding_service = DocumentEmbeddingService(repository, single_embedding=single_embedding)
+
+    return FolderScanner(processor, cache, embedding_service)

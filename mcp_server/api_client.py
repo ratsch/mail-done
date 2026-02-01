@@ -544,7 +544,9 @@ class EmailAPIClient:
             "research_fit_score": email.get("research_fit_score"),
             "recommendation_score": email.get("overall_recommendation_score"),
             "is_vip": bool(email.get("vip_level")),
-            "needs_reply": email.get("needs_reply", False)
+            "needs_reply": email.get("needs_reply", False),
+            # Account info for cache organization
+            "account_id": email.get("account_id"),
         }
     
     def _get_category_description(self, category: str) -> str:
@@ -709,9 +711,9 @@ class EmailAPIClient:
             }
         """
         # Get and validate cache directory
-        cache_dir_str = os.getenv("MCP_ATTACHMENT_CACHE_DIR")
+        cache_dir_str = os.getenv("MCP_FILE_CACHE_DIR")
         if not cache_dir_str:
-            return {"error": "MCP_ATTACHMENT_CACHE_DIR not configured"}
+            return {"error": "MCP_FILE_CACHE_DIR not configured"}
         
         cache_dir = Path(cache_dir_str).expanduser()
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -736,26 +738,37 @@ class EmailAPIClient:
         else:
             self._cache_cleanup_counter = cache_cleanup_counter
         
-        # Get attachment metadata first
+        # Get email details to determine account for subdirectory
+        email_result = await self.get_email_details(email_id)
+        if "error" in email_result:
+            return email_result
+
+        # Get account for subdirectory (default to "unknown" if not available)
+        account_id = email_result.get("account_id") or "unknown"
+        account_subdir = self._sanitize_filename(account_id, max_length=50)
+
+        # Get attachment metadata
         attachments_result = await self.list_attachments(email_id)
         if "error" in attachments_result:
             return attachments_result
-        
+
         # Extract list from result dict
         attachments_list = attachments_result.get("attachments", [])
         if attachment_index >= len(attachments_list):
             return {
                 "error": f"Attachment index {attachment_index} out of range (max: {len(attachments_list)-1})"
             }
-        
+
         attachment_meta = attachments_list[attachment_index]
         original_filename = attachment_meta['filename']
         expected_size = attachment_meta.get('size', 0)
-        
-        # Generate cache filename with sanitization
+
+        # Generate cache path: {cache_dir}/attachments/{account}/{email_id}_{index}_{filename}
         safe_filename = self._sanitize_filename(original_filename)
         cache_filename = f"{email_id}_{attachment_index}_{safe_filename}"
-        cache_path = cache_dir / cache_filename
+        account_cache_dir = cache_dir / "attachments" / account_subdir
+        account_cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = account_cache_dir / cache_filename
         
         # Check if already cached (verify size matches)
         if cache_path.exists():
@@ -871,6 +884,376 @@ class EmailAPIClient:
             "from_cache": False
         }
     
+    async def search_documents(
+        self,
+        query: str,
+        top_k: int = 10,
+        similarity_threshold: float = 0.5,
+        document_type: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Search indexed documents semantically.
+
+        Calls: GET /api/search/unified?types=document
+
+        Returns documents with full origin information (locations, hosts, paths).
+        """
+        params = {
+            "q": query,
+            "types": "document",
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+        }
+
+        if document_type:
+            params["document_type"] = document_type
+        if mime_type:
+            params["document_mime_type"] = mime_type
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+
+        result = await self._request("GET", "/api/search/unified", params=params)
+
+        if "error" not in result:
+            return {
+                "query": query,
+                "mode": "document_semantic",
+                "total": result.get("total", 0),
+                "results": [
+                    self._transform_document_result(r)
+                    for r in result.get("results", [])
+                    if r.get("result_type") == "document"
+                ]
+            }
+        return result
+
+    async def search_unified(
+        self,
+        query: str,
+        types: str = "all",
+        top_k: int = 10,
+        similarity_threshold: float = 0.5,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Unified search across emails AND documents.
+
+        Calls: GET /api/search/unified
+
+        Returns mixed results from both corpora, sorted by similarity.
+        """
+        params = {
+            "q": query,
+            "types": types,
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+        }
+
+        # Apply MCP date restrictions for email results
+        if types in ["all", "email"]:
+            params = self._apply_mcp_restrictions(params)
+        else:
+            # Document-only search - still apply date filters if provided
+            if date_from:
+                params["date_from"] = date_from
+            if date_to:
+                params["date_to"] = date_to
+
+        result = await self._request("GET", "/api/search/unified", params=params)
+
+        if "error" not in result:
+            transformed_results = []
+            for r in result.get("results", []):
+                if r.get("result_type") == "email":
+                    transformed_results.append({
+                        "result_type": "email",
+                        "similarity": r.get("similarity"),
+                        **self._transform_email_result({"email": r.get("email")})
+                    })
+                elif r.get("result_type") == "document":
+                    transformed_results.append({
+                        "result_type": "document",
+                        "similarity": r.get("similarity"),
+                        **self._transform_document_result(r)
+                    })
+
+            return {
+                "query": query,
+                "types": types,
+                "total": result.get("total", 0),
+                "results": transformed_results
+            }
+        return result
+
+    async def get_document_details(self, document_id: str) -> Dict[str, Any]:
+        """
+        Get full document details with all origins.
+
+        Calls: GET /api/documents/{document_id}
+
+        Returns complete document info including all file locations.
+        """
+        result = await self._request("GET", f"/api/documents/{document_id}")
+
+        if "error" not in result:
+            return self._transform_document_detail(result)
+        return result
+
+    def _transform_document_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform API document search result to MCP format with origins."""
+        doc = result.get("document", {})
+        origins = doc.get("origins", [])
+
+        # Build locations list with full path info
+        locations = []
+        for origin in origins:
+            loc = {
+                "host": origin.get("origin_host") or "unknown",
+                "path": origin.get("origin_path") or "",
+                "filename": origin.get("origin_filename") or doc.get("original_filename") or "unknown",
+                "type": origin.get("origin_type") or "unknown",
+                "is_primary": origin.get("is_primary", False),
+                "file_modified_at": origin.get("file_modified_at"),  # File's mtime
+            }
+            # Add email info for attachments
+            if origin.get("email_id"):
+                loc["email_id"] = origin.get("email_id")
+                loc["attachment_index"] = origin.get("attachment_index")
+            locations.append(loc)
+
+        return {
+            "id": doc.get("id"),
+            "filename": doc.get("original_filename") or "Untitled",
+            "mime_type": doc.get("mime_type"),
+            "file_size": doc.get("file_size"),
+            "page_count": doc.get("page_count"),
+            "document_type": doc.get("document_type"),
+            # Dates
+            "document_date": doc.get("document_date"),
+            "first_seen_at": doc.get("first_seen_at"),
+            "last_seen_at": doc.get("last_seen_at"),
+            # Content info
+            "title": doc.get("title"),
+            "summary": doc.get("summary"),
+            "ai_category": doc.get("ai_category"),
+            "extraction_quality": doc.get("extraction_quality"),
+            # Locations (origins)
+            "locations": locations,
+            "location_count": len(locations),
+            # Checksum for deduplication reference
+            "checksum": doc.get("checksum"),
+            # Similarity from search
+            "similarity_score": result.get("similarity"),
+        }
+
+    def _transform_document_detail(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform API document detail to MCP format with full origin info."""
+        doc = result.get("document", {})
+        origins = result.get("origins", [])
+
+        # Build locations list with full path info
+        locations = []
+        for origin in origins:
+            loc = {
+                "host": origin.get("origin_host") or "unknown",
+                "path": origin.get("origin_path") or "",
+                "filename": origin.get("origin_filename") or doc.get("original_filename") or "unknown",
+                "type": origin.get("origin_type") or "unknown",
+                "is_primary": origin.get("is_primary", False),
+                "file_modified_at": origin.get("file_modified_at"),  # File's mtime (last edited)
+                "discovered_at": origin.get("discovered_at"),
+                "last_verified_at": origin.get("last_verified_at"),
+                "is_deleted": origin.get("is_deleted", False),
+            }
+            # Add email info for attachments
+            if origin.get("email_id"):
+                loc["email_id"] = str(origin.get("email_id"))
+                loc["attachment_index"] = origin.get("attachment_index")
+            locations.append(loc)
+
+        return {
+            "id": str(doc.get("id")),
+            "filename": doc.get("original_filename") or "Untitled",
+            "mime_type": doc.get("mime_type"),
+            "file_size": doc.get("file_size"),
+            "page_count": doc.get("page_count"),
+            "document_type": doc.get("document_type"),
+            # Dates
+            "document_date": doc.get("document_date"),
+            "first_seen_at": doc.get("first_seen_at"),
+            "last_seen_at": doc.get("last_seen_at"),
+            "created_at": doc.get("created_at"),
+            # Content info
+            "title": doc.get("title"),
+            "summary": doc.get("summary"),
+            "ai_category": doc.get("ai_category"),
+            "ai_tags": doc.get("ai_tags"),
+            "extraction_status": doc.get("extraction_status"),
+            "extraction_quality": doc.get("extraction_quality"),
+            "extraction_method": doc.get("extraction_method"),
+            # Locations (origins)
+            "locations": locations,
+            "location_count": len(locations),
+            # Checksum for deduplication reference
+            "checksum": doc.get("checksum"),
+        }
+
+    async def download_document(
+        self,
+        document_id: str,
+        origin_index: int = 0,
+        fallback: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Download document file to cache directory.
+
+        Retrieves from origin (filesystem, SSH, or email attachment) and caches locally.
+
+        Args:
+            document_id: UUID of the document
+            origin_index: Which origin to try first (0=primary)
+            fallback: Try other origins if first fails
+
+        Returns:
+            {
+                "success": true,
+                "cached_path": "/path/to/cache/doc_abc123_report.pdf",
+                "original_filename": "report.pdf",
+                "size_bytes": 1048576,
+                "content_type": "application/pdf",
+                "from_cache": false,
+                "origin_used": "folder:laptop:/Users/user/Documents/report.pdf"
+            }
+        """
+        # Get and validate cache directory
+        cache_dir_str = os.getenv("MCP_FILE_CACHE_DIR")
+        if not cache_dir_str:
+            return {"error": "MCP_FILE_CACHE_DIR not configured"}
+
+        cache_dir = Path(cache_dir_str).expanduser()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get document details first to know filename and expected size
+        doc_result = await self.get_document_details(document_id)
+        if "error" in doc_result:
+            return doc_result
+
+        original_filename = doc_result.get("filename") or "document"
+        expected_size = doc_result.get("file_size", 0)
+        checksum = doc_result.get("checksum", "")[:8]  # First 8 chars for cache key
+        locations = doc_result.get("locations", [])
+
+        # Get hostname for subdirectory (from primary origin)
+        hostname = "unknown"
+        if locations:
+            hostname = locations[0].get("host") or "unknown"
+        hostname_subdir = self._sanitize_filename(hostname, max_length=50)
+
+        # Generate cache path: {cache_dir}/documents/{hostname}/{doc_id}_{checksum}_{filename}
+        safe_filename = self._sanitize_filename(original_filename)
+        cache_filename = f"{document_id[:8]}_{checksum}_{safe_filename}"
+        host_cache_dir = cache_dir / "documents" / hostname_subdir
+        host_cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = host_cache_dir / cache_filename
+
+        # Check if already cached (verify size matches)
+        if cache_path.exists():
+            cached_size = cache_path.stat().st_size
+            if cached_size == expected_size or expected_size == 0:
+                logger.info(f"Document found in cache: {cache_path}")
+                # Determine which origin would have been used
+                origin_info = "cached"
+                if locations:
+                    loc = locations[0]
+                    origin_info = f"{loc.get('type', 'unknown')}:{loc.get('host', 'unknown')}:{loc.get('path', '')}"
+
+                return {
+                    "success": True,
+                    "cached_path": str(cache_path),
+                    "original_filename": original_filename,
+                    "size_bytes": cached_size,
+                    "content_type": doc_result.get("mime_type"),
+                    "from_cache": True,
+                    "origin_used": origin_info,
+                }
+            else:
+                logger.warning(
+                    f"Cache size mismatch ({cached_size} vs {expected_size}), re-downloading"
+                )
+                cache_path.unlink()
+
+        # Download from backend
+        url = f"/api/documents/{document_id}/content"
+        params = {
+            "origin_index": origin_index,
+            "fallback": str(fallback).lower()
+        }
+        download_timeout = int(os.getenv("MCP_ATTACHMENT_DOWNLOAD_TIMEOUT", "120"))
+
+        content_type = None
+
+        try:
+            async with httpx.AsyncClient(timeout=download_timeout, verify=not MCP_SKIP_SSL_VERIFY) as http_client:
+                full_url = urljoin(self.base_url + "/", url.lstrip('/'))
+
+                # Build headers with signing if available
+                headers = dict(self.headers)
+                if self._use_signing:
+                    # Build path with query params for signing
+                    signing_path = f"/{url.lstrip('/')}?origin_index={origin_index}&fallback={str(fallback).lower()}"
+                    sign_headers = self._sign_request("GET", signing_path, b"")
+                    headers.update(sign_headers)
+
+                response = await http_client.get(full_url, headers=headers, params=params)
+
+                # Handle HTTP errors
+                if response.status_code == 404:
+                    return {"error": "Document not found or no accessible origins"}
+                elif response.status_code == 403:
+                    return {"error": "Access denied"}
+                elif response.status_code == 503:
+                    return {"error": "Origin temporarily unavailable"}
+
+                response.raise_for_status()
+                content_type = response.headers.get('Content-Type')
+
+                # Write file
+                with open(cache_path, 'wb') as f:
+                    f.write(response.content)
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error downloading document: {e.response.status_code} - {e.response.text}")
+            return {"error": f"Backend error: {e.response.status_code}"}
+        except httpx.RequestError as e:
+            logger.error(f"Request error downloading document: {e}")
+            return {"error": f"Failed to connect to backend: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Unexpected error downloading document: {e}", exc_info=True)
+            return {"error": f"Download failed: {str(e)}"}
+
+        # Determine which origin was used (based on fallback order)
+        origin_info = "unknown"
+        if locations:
+            # The backend tries origins in order, primary first
+            loc = locations[min(origin_index, len(locations) - 1)] if not fallback else locations[0]
+            origin_info = f"{loc.get('type', 'unknown')}:{loc.get('host', 'unknown')}:{loc.get('path', '')}"
+
+        return {
+            "success": True,
+            "cached_path": str(cache_path),
+            "original_filename": original_filename,
+            "size_bytes": cache_path.stat().st_size,
+            "content_type": content_type or doc_result.get("mime_type"),
+            "from_cache": False,
+            "origin_used": origin_info,
+        }
+
     async def list_imap_folders(self) -> Dict[str, Any]:
         """
         List all folders on the IMAP server.
@@ -982,9 +1365,9 @@ class EmailAPIClient:
         Returns:
             {"success": true, "files_deleted": 15, "bytes_freed": 52428800, "cache_dir": "..."}
         """
-        cache_dir_str = os.getenv("MCP_ATTACHMENT_CACHE_DIR")
+        cache_dir_str = os.getenv("MCP_FILE_CACHE_DIR")
         if not cache_dir_str:
-            return {"error": "MCP_ATTACHMENT_CACHE_DIR not configured"}
+            return {"error": "MCP_FILE_CACHE_DIR not configured"}
         
         cache_dir = Path(cache_dir_str).expanduser()
         if not cache_dir.exists():

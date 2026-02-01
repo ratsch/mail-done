@@ -62,31 +62,31 @@ else:
     logger.info("MCP API key authentication enabled")
 
 # Attachment feature flag
-MCP_ENABLE_ATTACHMENTS = os.getenv("MCP_ENABLE_ATTACHMENTS", "false").lower() == "true"
-MCP_ATTACHMENT_CACHE_DIR = os.getenv("MCP_ATTACHMENT_CACHE_DIR")
+MCP_ENABLE_FILE_DOWNLOADS = os.getenv("MCP_ENABLE_FILE_DOWNLOADS", "false").lower() == "true"
+MCP_FILE_CACHE_DIR = os.getenv("MCP_FILE_CACHE_DIR")
 
 # Validate attachment configuration if enabled
-if MCP_ENABLE_ATTACHMENTS:
-    if not MCP_ATTACHMENT_CACHE_DIR:
+if MCP_ENABLE_FILE_DOWNLOADS:
+    if not MCP_FILE_CACHE_DIR:
         error_msg = (
-            "MCP_ENABLE_ATTACHMENTS=true but MCP_ATTACHMENT_CACHE_DIR not configured. "
-            "Set MCP_ATTACHMENT_CACHE_DIR to a directory path (e.g., ~/Downloads/.mcp_attachments/work)"
+            "MCP_ENABLE_FILE_DOWNLOADS=true but MCP_FILE_CACHE_DIR not configured. "
+            "Set MCP_FILE_CACHE_DIR to a directory path (e.g., ~/Downloads/.mcp_attachments/work)"
         )
         logger.critical(error_msg)
         raise ValueError(error_msg)
     
     # Try to create cache directory to validate it's accessible
     from pathlib import Path
-    cache_dir = Path(MCP_ATTACHMENT_CACHE_DIR).expanduser()
+    cache_dir = Path(MCP_FILE_CACHE_DIR).expanduser()
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Attachment cache directory validated: {cache_dir}")
+        logger.info(f"File download cache directory validated: {cache_dir}")
     except Exception as e:
         error_msg = f"Cannot create cache directory {cache_dir}: {e}"
         logger.critical(error_msg)
         raise ValueError(error_msg)
 else:
-    logger.info("Attachment downloads disabled (set MCP_ENABLE_ATTACHMENTS=true to enable)")
+    logger.info("File downloads disabled (set MCP_ENABLE_FILE_DOWNLOADS=true to enable)")
 
 # Import API client (calls backend, not direct DB)
 from mcp_server.api_client import EmailAPIClient
@@ -346,6 +346,178 @@ Useful for understanding who sends the most emails.""",
             }
         ),
         Tool(
+            name="search_documents",
+            description="""Search indexed documents (files) semantically.
+
+Searches files that have been indexed from folders or email attachments.
+Returns documents matching the query with similarity scores and full location info.
+
+**Returns for each document:**
+- Filename, file type, size
+- Dates: document_date (file date), first_seen_at, last_seen_at
+- Locations: All origins with host name and full path
+- Similarity score
+
+**Examples:**
+- "invoices from 2024"
+- "machine learning papers"
+- "contract renewal terms"
+
+Use this to find files that have been indexed.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 10)",
+                        "default": 10
+                    },
+                    "similarity_threshold": {
+                        "type": "number",
+                        "description": "Minimum similarity score 0-1 (default: 0.5)",
+                        "default": 0.5
+                    },
+                    "document_type": {
+                        "type": "string",
+                        "description": "Filter by document type (e.g., 'invoice', 'contract')"
+                    },
+                    "mime_type": {
+                        "type": "string",
+                        "description": "Filter by MIME type (e.g., 'application/pdf')"
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD)"
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD)"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_unified",
+            description="""Search across BOTH emails AND documents in a single query.
+
+Searches both email text and indexed files, returning merged results ranked by similarity.
+
+**Useful when:**
+- Looking for information that might be in an email OR a file
+- "Find everything about project X"
+- "What do I have about machine learning?"
+
+**Returns:**
+- Mixed results with result_type ("email" or "document")
+- For emails: subject, sender, date, summary
+- For documents: filename, locations (origins), dates
+
+Use 'types' param to filter: "all", "email", or "document".""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query"
+                    },
+                    "types": {
+                        "type": "string",
+                        "enum": ["all", "email", "document"],
+                        "description": "What to search: all (default), email, or document",
+                        "default": "all"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 10)",
+                        "default": 10
+                    },
+                    "similarity_threshold": {
+                        "type": "number",
+                        "description": "Minimum similarity score 0-1 (default: 0.5)",
+                        "default": 0.5
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD)"
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD)"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="get_document_details",
+            description="""Get full details of a specific document.
+
+Given a document ID, returns complete information including:
+- Filename, file type, size, page count
+- Dates: document_date (file date), first_seen_at, last_seen_at
+- All locations (origins) with host name and full path
+- Extracted text preview
+- AI category and tags
+
+Use after searching to get full document information.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "UUID of the document"
+                    }
+                },
+                "required": ["document_id"]
+            }
+        ),
+        Tool(
+            name="download_document",
+            description="""Download a document file to local cache.
+
+Retrieves the actual file from its origin (filesystem, SSH, or email attachment).
+If primary origin is unavailable, falls back to other origins with same checksum.
+
+**Returns:**
+- cached_path: Local path to downloaded file
+- original_filename: Original filename
+- size_bytes: File size
+- content_type: MIME type
+- from_cache: Whether file was already cached
+- origin_used: Which origin the file was retrieved from
+
+**Cache:**
+Files are cached using document ID + checksum prefix.
+Re-downloading same document returns cached version.
+
+REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true (uses same cache directory).""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "UUID of the document to download"
+                    },
+                    "origin_index": {
+                        "type": "integer",
+                        "description": "Which origin to try first (0=primary, default)",
+                        "default": 0
+                    },
+                    "fallback": {
+                        "type": "boolean",
+                        "description": "Try other origins if first fails (default: true)",
+                        "default": True
+                    }
+                },
+                "required": ["document_id"]
+            }
+        ),
+        Tool(
             name="list_imap_folders",
             description="""List all folders on the IMAP server.
 
@@ -439,7 +611,7 @@ Messages are returned newest first.""",
     ]
     
     # Add attachment tools if enabled
-    if MCP_ENABLE_ATTACHMENTS:
+    if MCP_ENABLE_FILE_DOWNLOADS:
         TOOLS.extend([
             Tool(
                 name="list_attachments",
@@ -457,7 +629,7 @@ Messages are returned newest first.""",
             ),
             Tool(
                 name="download_attachment",
-                description="Download an email attachment to local cache directory. Returns the cached file path and original filename. REQUIRES: MCP_ENABLE_ATTACHMENTS=true. Files are cached - if already downloaded, returns existing path without re-downloading. NOTE: Downloaded attachments persist in cache - delete manually if sensitive.",
+                description="Download an email attachment to local cache directory. Returns the cached file path and original filename. REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true. Files are cached - if already downloaded, returns existing path without re-downloading. NOTE: Downloaded attachments persist in cache - delete manually if sensitive.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -475,7 +647,7 @@ Messages are returned newest first.""",
             ),
             Tool(
                 name="clear_attachment_cache",
-                description="Clear the attachment cache directory. Optionally clear only files older than specified days. REQUIRES: MCP_ENABLE_ATTACHMENTS=true.",
+                description="Clear the attachment cache directory. Optionally clear only files older than specified days. REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -554,6 +726,64 @@ Messages are returned newest first.""",
                     top_k=arguments.get("top_k", 20)
                 )
             
+            elif name == "search_documents":
+                result = await client.search_documents(
+                    query=arguments["query"],
+                    top_k=arguments.get("top_k", 10),
+                    similarity_threshold=arguments.get("similarity_threshold", 0.5),
+                    document_type=arguments.get("document_type"),
+                    mime_type=arguments.get("mime_type"),
+                    date_from=arguments.get("date_from"),
+                    date_to=arguments.get("date_to")
+                )
+
+            elif name == "search_unified":
+                result = await client.search_unified(
+                    query=arguments["query"],
+                    types=arguments.get("types", "all"),
+                    top_k=arguments.get("top_k", 10),
+                    similarity_threshold=arguments.get("similarity_threshold", 0.5),
+                    date_from=arguments.get("date_from"),
+                    date_to=arguments.get("date_to")
+                )
+
+            elif name == "get_document_details":
+                result = await client.get_document_details(
+                    document_id=arguments["document_id"]
+                )
+
+            elif name == "download_document":
+                if not MCP_ENABLE_FILE_DOWNLOADS:
+                    result = {"error": "Document downloads not enabled. Set MCP_ENABLE_FILE_DOWNLOADS=true"}
+                else:
+                    # Audit log document download attempt
+                    audit_log(
+                        "download_document",
+                        {
+                            "document_id": arguments["document_id"],
+                            "origin_index": arguments.get("origin_index", 0)
+                        }
+                    )
+                    result = await client.download_document(
+                        document_id=arguments["document_id"],
+                        origin_index=arguments.get("origin_index", 0),
+                        fallback=arguments.get("fallback", True)
+                    )
+                    # Log result
+                    if result.get("success"):
+                        logger.info(
+                            f"AUDIT: Document downloaded - document_id={arguments['document_id']}, "
+                            f"filename={result.get('original_filename', 'unknown')}, "
+                            f"size={result.get('size_bytes', 0)}, "
+                            f"from_cache={result.get('from_cache', False)}, "
+                            f"origin={result.get('origin_used', 'unknown')}"
+                        )
+                    else:
+                        logger.warning(
+                            f"AUDIT: Document download failed - document_id={arguments['document_id']}, "
+                            f"error={result.get('error', 'unknown')}"
+                        )
+
             elif name == "list_imap_folders":
                 result = await client.list_imap_folders()
             
@@ -570,16 +800,16 @@ Messages are returned newest first.""",
                 )
             
             elif name == "list_attachments":
-                if not MCP_ENABLE_ATTACHMENTS:
-                    result = {"error": "Attachment downloads not enabled. Set MCP_ENABLE_ATTACHMENTS=true"}
+                if not MCP_ENABLE_FILE_DOWNLOADS:
+                    result = {"error": "File downloads not enabled. Set MCP_ENABLE_FILE_DOWNLOADS=true"}
                 else:
                     result = await client.list_attachments(
                         email_id=arguments["email_id"]
                     )
             
             elif name == "download_attachment":
-                if not MCP_ENABLE_ATTACHMENTS:
-                    result = {"error": "Attachment downloads not enabled. Set MCP_ENABLE_ATTACHMENTS=true"}
+                if not MCP_ENABLE_FILE_DOWNLOADS:
+                    result = {"error": "File downloads not enabled. Set MCP_ENABLE_FILE_DOWNLOADS=true"}
                 else:
                     # Audit log attachment download attempt
                     audit_log(
@@ -610,8 +840,8 @@ Messages are returned newest first.""",
                         )
             
             elif name == "clear_attachment_cache":
-                if not MCP_ENABLE_ATTACHMENTS:
-                    result = {"error": "Attachment downloads not enabled. Set MCP_ENABLE_ATTACHMENTS=true"}
+                if not MCP_ENABLE_FILE_DOWNLOADS:
+                    result = {"error": "File downloads not enabled. Set MCP_ENABLE_FILE_DOWNLOADS=true"}
                 else:
                     result = await client.clear_attachment_cache(
                         older_than_days=arguments.get("older_than_days")

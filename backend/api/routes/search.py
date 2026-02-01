@@ -159,13 +159,24 @@ async def unified_search(
             document_min_quality=document_min_quality,
         )
 
-        # Format results
+        # Format results - fetch origins for documents
+        from backend.core.documents.repository import DocumentRepository
+        from backend.api.routes.documents import DocumentOriginResponse
+        doc_repo = DocumentRepository(db)
+
         unified_results = []
         for result in results:
+            doc_response = None
+            if result.result_type == ResultType.DOCUMENT:
+                # Build document response with origins
+                doc_response = DocumentResponse.model_validate(result.item)
+                origins = await doc_repo.get_origins(result.item.id)
+                doc_response.origins = [DocumentOriginResponse.model_validate(o) for o in origins]
+
             item = UnifiedResultItem(
                 result_type=result.result_type.value,
                 email=EmailResponse.model_validate(result.item) if result.result_type == ResultType.EMAIL else None,
-                document=DocumentResponse.model_validate(result.item) if result.result_type == ResultType.DOCUMENT else None,
+                document=doc_response,
                 similarity=result.similarity,
                 date=result.date,
             )

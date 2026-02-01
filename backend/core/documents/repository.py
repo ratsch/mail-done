@@ -26,6 +26,45 @@ from backend.core.documents.models import (
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_text(text: Optional[str]) -> Optional[str]:
+    """
+    Remove null characters from text that cause PostgreSQL JSON errors.
+
+    PostgreSQL cannot store \u0000 (null characters) in JSON/JSONB fields.
+    These can appear in poorly-encoded PDFs or binary data.
+    """
+    if text is None:
+        return None
+    return text.replace('\x00', '')
+
+
+def _sanitize_structure(structure: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sanitize all text fields in an extraction structure.
+
+    Recursively cleans null characters from text fields in pages/sheets/sections.
+    """
+    result = {}
+    for key, value in structure.items():
+        if isinstance(value, list):
+            sanitized_list = []
+            for item in value:
+                if isinstance(item, dict):
+                    sanitized_item = {}
+                    for k, v in item.items():
+                        if k == 'text' and isinstance(v, str):
+                            sanitized_item[k] = _sanitize_text(v)
+                        else:
+                            sanitized_item[k] = v
+                    sanitized_list.append(sanitized_item)
+                else:
+                    sanitized_list.append(item)
+            result[key] = sanitized_list
+        else:
+            result[key] = value
+    return result
+
+
 class DocumentRepository:
     """
     Repository for document CRUD operations.
@@ -175,7 +214,7 @@ class DocumentRepository:
         if not document:
             return None
 
-        document.extracted_text = extracted_text
+        document.extracted_text = _sanitize_text(extracted_text)
         document.extraction_status = extraction_status.value
         document.extraction_method = extraction_method
         document.extraction_quality = extraction_quality
@@ -228,7 +267,8 @@ class DocumentRepository:
             logger.info(f"Storing {len(sections)} sections for document {document_id}")
 
         if structure:
-            document.extraction_structure = structure
+            # Sanitize null characters that cause PostgreSQL JSON errors
+            document.extraction_structure = _sanitize_structure(structure)
 
         return document
 
@@ -246,6 +286,51 @@ class DocumentRepository:
         if not document or not document.extraction_structure:
             return None
         return document.extraction_structure
+
+    async def update_content_analysis(
+        self,
+        document_id: UUID,
+        has_images: Optional[bool] = None,
+        has_native_text: Optional[bool] = None,
+        is_image_only: Optional[bool] = None,
+        is_scanned_with_ocr: Optional[bool] = None,
+        ocr_recommended: Optional[bool] = None,
+        text_source: Optional[str] = None,
+    ) -> Optional[Document]:
+        """
+        Update document with content analysis results.
+
+        Args:
+            document_id: Document UUID
+            has_images: File contains image content
+            has_native_text: File has extractable text layer
+            is_image_only: File is all images, no native text
+            is_scanned_with_ocr: Scanned PDF with existing OCR text overlay
+            ocr_recommended: OCR would help (can be overwritten later)
+            text_source: Source of extracted_text ('native', 'ocr', 'mixed', 'none')
+
+        Returns:
+            Updated Document or None if not found
+        """
+        document = await self.get_by_id(document_id)
+        if not document:
+            return None
+
+        if has_images is not None:
+            document.has_images = has_images
+        if has_native_text is not None:
+            document.has_native_text = has_native_text
+        if is_image_only is not None:
+            document.is_image_only = is_image_only
+        if is_scanned_with_ocr is not None:
+            document.is_scanned_with_ocr = is_scanned_with_ocr
+        if ocr_recommended is not None:
+            document.ocr_recommended = ocr_recommended
+        if text_source is not None:
+            document.text_source = text_source
+
+        logger.debug(f"Updated content analysis for document {document_id}")
+        return document
 
     async def update_extraction_with_comparison(
         self,
@@ -301,16 +386,16 @@ class DocumentRepository:
         if not should_update:
             return False, False
 
-        # Update extraction
-        document.extracted_text = new_text
+        # Update extraction (sanitize null characters)
+        document.extracted_text = _sanitize_text(new_text)
         document.extraction_method = new_method
         document.extraction_quality = new_quality
         document.extraction_status = ExtractionStatus.COMPLETED.value
         document.extracted_at = datetime.utcnow()
 
-        # Update structure if provided
+        # Update structure if provided (sanitize null characters)
         if new_structure:
-            document.extraction_structure = new_structure
+            document.extraction_structure = _sanitize_structure(new_structure)
 
         # Queue embedding regeneration
         await self.queue_task(
@@ -579,7 +664,12 @@ class DocumentRepository:
         origin_host: str,
         origin_path: str,
     ) -> Optional[DocumentOrigin]:
-        """Find an origin by its file path."""
+        """
+        Find an origin by its file path.
+
+        For folder origins, also checks for "localhost" as a legacy fallback
+        and updates the hostname if found.
+        """
         stmt = (
             select(DocumentOrigin)
             .where(DocumentOrigin.origin_type == origin_type)
@@ -588,7 +678,26 @@ class DocumentRepository:
             .where(DocumentOrigin.is_deleted == False)
         )
         result = self.db.execute(stmt)
-        return result.scalar_one_or_none()
+        origin = result.scalar_one_or_none()
+
+        # For folder origins, check for legacy "localhost" entries and migrate them
+        if origin is None and origin_type == "folder" and origin_host != "localhost":
+            stmt_localhost = (
+                select(DocumentOrigin)
+                .where(DocumentOrigin.origin_type == origin_type)
+                .where(DocumentOrigin.origin_host == "localhost")
+                .where(DocumentOrigin.origin_path == origin_path)
+                .where(DocumentOrigin.is_deleted == False)
+            )
+            result_localhost = self.db.execute(stmt_localhost)
+            origin = result_localhost.scalar_one_or_none()
+
+            # Migrate the hostname from "localhost" to actual hostname
+            if origin is not None:
+                logger.info(f"Migrating origin hostname from 'localhost' to '{origin_host}' for {origin_path}")
+                origin.origin_host = origin_host
+
+        return origin
 
     async def count_document_origins(
         self,

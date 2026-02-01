@@ -298,7 +298,9 @@ class TestHelperFunctions:
 
         config = get_host_config("localhost")
         assert config is not None
-        assert config.name == "localhost"
+        # "localhost" maps to the local machine's actual hostname
+        assert config.type == "local"
+        assert config.mount_point == "/"
 
     def test_get_host_config_not_found(self):
         """Should return None for unknown host."""
@@ -335,7 +337,8 @@ class TestHelperFunctions:
         assert config.base_path == "/documents"
         assert config.recursive is True
         assert config.extensions == ["pdf"]
-        assert config.host.name == "localhost"
+        # "localhost" maps to local machine's actual hostname
+        assert config.host.type == "local"
 
     def test_create_scan_config_unknown_host(self):
         """Should raise for unknown host."""

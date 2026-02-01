@@ -909,6 +909,74 @@ async def simple_search(
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
+@app.get("/api/search/unified")
+async def unified_search(
+    q: str = Query(..., description="Search query"),
+    types: str = Query("all", description="What to search: all, email, or document"),
+    limit: int = Query(20, ge=1, le=100),
+    similarity_threshold: float = Query(0.6, ge=0.0, le=1.0, description="Similarity threshold"),
+    date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    # Email-specific filters
+    email_category: Optional[str] = Query(None, description="Filter emails by category"),
+    email_sender: Optional[str] = Query(None, description="Filter emails by sender"),
+    email_account: Optional[str] = Query(None, description="Filter emails by account"),
+    # Document-specific filters
+    document_type: Optional[str] = Query(None, description="Filter documents by type"),
+    document_mime_type: Optional[str] = Query(None, description="Filter documents by MIME type"),
+    session = Depends(get_oauth_session),
+    _user: str = Depends(verify_credentials)
+):
+    """
+    Unified search across emails and documents.
+
+    Supports searching:
+    - emails only (types=email)
+    - documents only (types=document)
+    - both (types=all)
+    """
+    try:
+        params = {
+            "q": q,
+            "types": types,
+            "top_k": limit,
+            "similarity_threshold": similarity_threshold,
+        }
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+        if email_category:
+            params["email_category"] = email_category
+        if email_sender:
+            params["email_sender"] = email_sender
+        if email_account:
+            params["email_account"] = email_account
+        if document_type:
+            params["document_type"] = document_type
+        if document_mime_type:
+            params["document_mime_type"] = document_mime_type
+
+        response = await make_signed_request(session, "GET", "/api/search/unified", params=params)
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Backend API error: {response.text}"
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to backend API. Please try again later."
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unified search failed: {str(e)}")
+
+
 # ============================================================================
 # API Endpoints - Cost Overview (New endpoint, adds to Backend API)
 # ============================================================================

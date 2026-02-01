@@ -44,6 +44,7 @@ class DocumentOriginResponse(BaseModel):
     origin_filename: Optional[str]
     email_id: Optional[UUID]
     attachment_index: Optional[int]
+    file_modified_at: Optional[datetime]  # File's last modification time (from filesystem)
     discovered_at: Optional[datetime]
     last_verified_at: Optional[datetime]
     is_primary: bool
@@ -73,6 +74,8 @@ class DocumentResponse(BaseModel):
     first_seen_at: Optional[datetime]
     last_seen_at: Optional[datetime]
     created_at: datetime
+    # Optional - populated in unified search results
+    origins: Optional[List[DocumentOriginResponse]] = None
 
     class Config:
         from_attributes = True

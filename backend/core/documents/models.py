@@ -104,6 +104,21 @@ class Document(Base):
     extraction_cost = Column(Float)          # API cost in USD
     extracted_at = Column(DateTime(timezone=True))
 
+    # Content analysis (detected from source file)
+    has_images = Column(Boolean)              # File contains image content (scanned pages, embedded images)
+    has_native_text = Column(Boolean)         # File has extractable text layer built-in
+    is_image_only = Column(Boolean)           # File is all images, no native text
+    is_scanned_with_ocr = Column(Boolean)     # Scanned PDF with existing OCR text overlay
+
+    # OCR state (our processing in DB)
+    ocr_applied = Column(Boolean, default=False)    # OCR was run, result stored in extracted_text
+    ocr_pipeline_version = Column(String(50))       # e.g., "tesseract-5.3", "claude-ocr-v1"
+    text_source = Column(String(20))                # 'native', 'ocr', 'mixed', 'none'
+
+    # OCR recommendation flag - initialized by formula, can be overwritten
+    # Default: (is_image_only AND NOT ocr_applied) OR (has_images AND NOT has_native_text AND NOT ocr_applied)
+    ocr_recommended = Column(Boolean)
+
     # Structured extraction data for per-page/per-sheet embeddings
     # JSON format: {"pages": [{"page": 1, "text": "..."}]} or {"sheets": [{"sheet": "Name", "text": "..."}]}
     extraction_structure = Column(JSON)
@@ -159,6 +174,15 @@ class Document(Base):
             'orphaned_at',
             postgresql_where=(is_orphaned == True)
         ),
+        # Partial index for documents needing OCR
+        Index(
+            'idx_documents_ocr_recommended',
+            'id',
+            postgresql_where=(ocr_recommended == True)
+        ),
+        # Index for OCR state queries
+        Index('idx_documents_ocr_applied', 'ocr_applied'),
+        Index('idx_documents_text_source', 'text_source'),
     )
 
     def __repr__(self) -> str:

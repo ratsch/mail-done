@@ -12,6 +12,7 @@ Supports:
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 from uuid import UUID
@@ -21,12 +22,18 @@ from backend.core.documents.repository import DocumentRepository
 
 logger = logging.getLogger(__name__)
 
+# Retry settings for token limit errors
+MAX_EMBEDDING_RETRIES = 3
+TOKEN_LIMIT = 8192  # Model's max context length
+
 # Constants matching email embedding configuration
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIMENSIONS = 3072
 MAX_TOKENS_PER_CHUNK = 8000  # Safe limit for embedding model
-CHARS_PER_TOKEN_ESTIMATE = 4  # Rough estimate
-MAX_CHARS_PER_CHUNK = MAX_TOKENS_PER_CHUNK * CHARS_PER_TOKEN_ESTIMATE
+# Conservative estimate: 2.5 chars/token handles structured data (spreadsheets, tables)
+# which have shorter tokens than prose. This prevents "max tokens exceeded" errors.
+CHARS_PER_TOKEN_ESTIMATE = 2.5
+MAX_CHARS_PER_CHUNK = int(MAX_TOKENS_PER_CHUNK * CHARS_PER_TOKEN_ESTIMATE)  # ~20000 chars
 
 
 @dataclass
@@ -76,6 +83,7 @@ class DocumentEmbeddingService:
         self,
         repository: DocumentRepository,
         embedding_client=None,
+        single_embedding: bool = False,
     ):
         """
         Initialize the embedding service.
@@ -84,10 +92,13 @@ class DocumentEmbeddingService:
             repository: DocumentRepository for storing embeddings
             embedding_client: OpenAI client for generating embeddings.
                               If None, will be lazy-loaded.
+            single_embedding: If True, generate only one embedding per document
+                             (ignore page/sheet structure for multi-page docs)
         """
         self.repository = repository
         self._client = embedding_client
         self.model = DEFAULT_EMBEDDING_MODEL
+        self.single_embedding = single_embedding
 
     @property
     def client(self):
@@ -166,6 +177,9 @@ class DocumentEmbeddingService:
         """
         Generate embedding vector for text.
 
+        Includes retry logic: if the text exceeds the token limit,
+        truncates and retries with smaller content.
+
         Args:
             text: Text to embed
 
@@ -175,15 +189,51 @@ class DocumentEmbeddingService:
         if not text or not text.strip():
             raise ValueError("Cannot generate embedding for empty text")
 
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=text,
-        )
-        return response.data[0].embedding
+        current_text = text
+        for attempt in range(MAX_EMBEDDING_RETRIES):
+            try:
+                response = self.client.embeddings.create(
+                    model=self.model,
+                    input=current_text,
+                )
+                return response.data[0].embedding
+
+            except Exception as e:
+                error_str = str(e)
+                # Check if this is a token limit error
+                if "maximum context length" in error_str and "tokens" in error_str:
+                    # Parse the actual token count from error message
+                    # Format: "you requested 8336 tokens"
+                    match = re.search(r'you requested (\d+) tokens', error_str)
+                    if match:
+                        requested_tokens = int(match.group(1))
+                        # Calculate reduction ratio needed
+                        ratio = TOKEN_LIMIT / requested_tokens * 0.9  # 10% safety margin
+                        new_length = int(len(current_text) * ratio)
+
+                        if attempt < MAX_EMBEDDING_RETRIES - 1 and new_length > 100:
+                            logger.warning(
+                                f"Token limit exceeded ({requested_tokens} tokens), "
+                                f"truncating from {len(current_text)} to {new_length} chars (attempt {attempt + 1})"
+                            )
+                            # Truncate at word boundary
+                            current_text = current_text[:new_length]
+                            last_space = current_text.rfind(' ')
+                            if last_space > new_length * 0.8:
+                                current_text = current_text[:last_space]
+                            current_text += "..."
+                            continue
+
+                # Re-raise if not a token limit error or out of retries
+                raise
+
+        # Should not reach here, but just in case
+        raise RuntimeError(f"Failed to generate embedding after {MAX_EMBEDDING_RETRIES} attempts")
 
     async def generate_document_embedding(
         self,
         document: Document,
+        single_embedding: bool = False,
     ) -> EmbeddingResult:
         """
         Generate embedding for a document.
@@ -195,12 +245,15 @@ class DocumentEmbeddingService:
 
         Args:
             document: Document to embed
+            single_embedding: If True, generate only one embedding per document
+                             (ignore page/sheet structure)
 
         Returns:
             EmbeddingResult with counts
         """
         # Check for stored extraction structure (pages/sheets)
-        structure = await self.repository.get_extraction_structure(document.id)
+        # Skip structure-based embeddings if single_embedding requested
+        structure = None if single_embedding else await self.repository.get_extraction_structure(document.id)
 
         if structure:
             if "pages" in structure and structure["pages"]:

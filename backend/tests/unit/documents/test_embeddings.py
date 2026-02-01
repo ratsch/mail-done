@@ -21,6 +21,8 @@ from backend.core.documents.embeddings import (
     MAX_CHARS_PER_CHUNK,
     EMBEDDING_DIMENSIONS,
     DEFAULT_EMBEDDING_MODEL,
+    MAX_EMBEDDING_RETRIES,
+    TOKEN_LIMIT,
 )
 
 
@@ -196,6 +198,66 @@ class TestGenerateEmbedding:
 
         with pytest.raises(ValueError, match="empty text"):
             await embedding_service.generate_embedding("   ")
+
+    @pytest.mark.asyncio
+    async def test_generate_embedding_retry_on_token_limit(self, embedding_service, mock_openai_client):
+        """Should retry with smaller text when token limit is exceeded."""
+        # First call fails with token limit error, second succeeds
+        token_limit_error = Exception(
+            "This model's maximum context length is 8192 tokens, "
+            "however you requested 10000 tokens (10000 in your prompt; 0 for the completion)."
+        )
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=[0.1] * EMBEDDING_DIMENSIONS)]
+
+        mock_openai_client.embeddings.create.side_effect = [
+            token_limit_error,  # First attempt fails
+            mock_response,      # Second attempt succeeds
+        ]
+
+        # Long text that would exceed token limit
+        long_text = "word " * 5000  # ~25000 chars
+
+        embedding = await embedding_service.generate_embedding(long_text)
+
+        assert len(embedding) == EMBEDDING_DIMENSIONS
+        assert mock_openai_client.embeddings.create.call_count == 2
+
+        # Second call should have shorter text
+        second_call_text = mock_openai_client.embeddings.create.call_args_list[1][1]["input"]
+        assert len(second_call_text) < len(long_text)
+        assert second_call_text.endswith("...")
+
+    @pytest.mark.asyncio
+    async def test_generate_embedding_retry_exhausted(self, embedding_service, mock_openai_client):
+        """Should raise after all retries exhausted."""
+        token_limit_error = Exception(
+            "This model's maximum context length is 8192 tokens, "
+            "however you requested 9000 tokens (9000 in your prompt; 0 for the completion)."
+        )
+
+        # All attempts fail
+        mock_openai_client.embeddings.create.side_effect = token_limit_error
+
+        long_text = "word " * 5000
+
+        with pytest.raises(Exception, match="maximum context length"):
+            await embedding_service.generate_embedding(long_text)
+
+        assert mock_openai_client.embeddings.create.call_count == MAX_EMBEDDING_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_generate_embedding_non_token_error_not_retried(self, embedding_service, mock_openai_client):
+        """Should not retry on non-token-limit errors."""
+        other_error = Exception("Connection timeout")
+
+        mock_openai_client.embeddings.create.side_effect = other_error
+
+        with pytest.raises(Exception, match="Connection timeout"):
+            await embedding_service.generate_embedding("test text")
+
+        # Should only try once for non-token errors
+        assert mock_openai_client.embeddings.create.call_count == 1
 
 
 class TestGenerateDocumentEmbedding:
@@ -506,5 +568,6 @@ class TestConstants:
 
     def test_max_chars_reasonable(self):
         """Max chars should be reasonable for token limit."""
-        # 8000 tokens * 4 chars/token = 32000 chars
-        assert MAX_CHARS_PER_CHUNK == 32000
+        # 8000 tokens * 2.5 chars/token = 20000 chars
+        # Conservative estimate to handle structured data (spreadsheets, tables)
+        assert MAX_CHARS_PER_CHUNK == 20000

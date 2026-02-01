@@ -344,11 +344,12 @@ class UnifiedSearchService:
             params['min_quality'] = min_quality
 
         if date_from:
-            filter_conditions.append("d.document_date >= :date_from")
+            # Use document_date if available, otherwise fall back to first_seen_at
+            filter_conditions.append("COALESCE(d.document_date, d.first_seen_at) >= :date_from")
             params['date_from'] = date_from
 
         if date_to:
-            filter_conditions.append("d.document_date <= :date_to")
+            filter_conditions.append("COALESCE(d.document_date, d.first_seen_at) <= :date_to")
             params['date_to'] = date_to
 
         where_clause = " AND ".join(filter_conditions)
