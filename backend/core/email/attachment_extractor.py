@@ -207,7 +207,130 @@ class AttachmentExtractor:
                 # Otherwise retry
                 delay = self.RETRY_DELAY_BASE ** (attempt + 1)
                 time.sleep(delay)
-    
+
+    def get_all_attachments(
+        self,
+        account_id: str,
+        folder: str,
+        uid: str,
+        timeout: int = 120,
+        message_id: Optional[str] = None,
+        on_location_update: Optional[Callable[[str, str], None]] = None
+    ) -> List[Tuple[bytes, str, str]]:
+        """
+        Fetch all attachments from an email on IMAP with retry logic.
+
+        Similar to get_attachment() but returns ALL attachments at once,
+        avoiding multiple IMAP round-trips for emails with multiple attachments.
+
+        Args:
+            account_id: Account nickname (e.g., 'work', 'personal')
+            folder: IMAP folder name (expected location)
+            uid: Email UID (string, expected)
+            timeout: Connection timeout in seconds
+            message_id: Optional Message-ID header for fallback lookup
+            on_location_update: Optional callback(new_folder, new_uid) called when
+                               email is found in a different location
+
+        Returns:
+            List of (binary_content, filename, content_type) tuples for each attachment
+
+        Raises:
+            EmailNotFoundError: Email not found on IMAP
+            FolderNotFoundError: Folder not found
+            IMAPConnectionError: Connection failed after retries
+        """
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                # Get IMAP config for account
+                config = self.account_manager.get_imap_config(account_id)
+
+                # Connect to IMAP with timeout
+                with self._get_imap_connection(config, timeout) as conn:
+                    # Try to find email - first at expected location, then by Message-ID
+                    actual_folder, actual_uid, raw_email = self._find_email(
+                        conn, folder, uid, message_id
+                    )
+
+                    # If found in different location, call update callback
+                    if (actual_folder != folder or str(actual_uid) != str(uid)) and on_location_update:
+                        logger.info(
+                            f"Email moved: {folder}/{uid} -> {actual_folder}/{actual_uid}"
+                        )
+                        on_location_update(actual_folder, str(actual_uid))
+
+                    # Parse MIME
+                    msg = email.message_from_bytes(raw_email)
+
+                    # Extract all attachments
+                    return self._extract_all_attachments(msg)
+
+            except (ConnectionError, TimeoutError, OSError) as e:
+                if attempt < self.MAX_RETRIES - 1:
+                    delay = self.RETRY_DELAY_BASE ** (attempt + 1)
+                    logger.warning(
+                        f"IMAP connection failed, retry {attempt+1}/{self.MAX_RETRIES} in {delay}s: {e}"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise IMAPConnectionError(
+                        f"IMAP connection failed after {self.MAX_RETRIES} attempts: {e}"
+                    )
+            except (EmailNotFoundError, FolderNotFoundError, IMAPError) as e:
+                # These errors shouldn't be retried
+                raise
+            except Exception as e:
+                # Unexpected errors - log and re-raise
+                logger.error(f"Unexpected error in get_all_attachments (attempt {attempt+1}): {e}", exc_info=True)
+                if attempt == self.MAX_RETRIES - 1:
+                    raise IMAPConnectionError(f"Failed after {self.MAX_RETRIES} attempts: {e}")
+                # Otherwise retry
+                delay = self.RETRY_DELAY_BASE ** (attempt + 1)
+                time.sleep(delay)
+
+        # Should never reach here
+        return []
+
+    def _extract_all_attachments(self, msg: Message) -> List[Tuple[bytes, str, str]]:
+        """
+        Extract all attachments from MIME message.
+
+        Args:
+            msg: Parsed email message
+
+        Returns:
+            List of (binary_content, filename, content_type) tuples
+        """
+        results = []
+
+        # Use shared attachment detection logic
+        attachments = []
+        for part in msg.walk():
+            if is_attachment_part(part):
+                attachments.append(part)
+
+        for idx, part in enumerate(attachments):
+            try:
+                # Extract and decode filename
+                filename = self._decode_filename(part, idx)
+
+                # Get content type
+                content_type = part.get_content_type() or 'application/octet-stream'
+
+                # Decode payload
+                content = part.get_payload(decode=True)
+                if content is None:
+                    logger.warning(f"Could not decode attachment {idx}: {filename}")
+                    continue
+
+                results.append((content, filename, content_type))
+
+            except Exception as e:
+                logger.warning(f"Failed to extract attachment {idx}: {e}")
+                continue
+
+        return results
+
     def _find_email(
         self,
         conn: IMAPClient,

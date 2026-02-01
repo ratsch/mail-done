@@ -2668,6 +2668,19 @@ async def main():
                        help='Skip action execution (like dry-run but still processes)')
     parser.add_argument('--generate-drafts', action='store_true',
                        help='Generate draft replies using AI answer_options (Phase 3, default: OFF)')
+
+    # Attachment backfill mode
+    parser.add_argument('--backfill-attachments', action='store_true',
+                       help='Backfill attachment indexing for existing emails (fetches from IMAP)')
+    parser.add_argument('--backfill-since', type=str, default=None, metavar='DATE',
+                       help='Only backfill emails since this date (YYYY-MM-DD format)')
+    parser.add_argument('--backfill-until', type=str, default=None, metavar='DATE',
+                       help='Only backfill emails until this date (YYYY-MM-DD format)')
+    parser.add_argument('--backfill-retry-failed', action='store_true',
+                       help='Include previously failed emails in backfill (respects backoff)')
+    parser.add_argument('--backfill-stats-only', action='store_true',
+                       help='Only show backfill statistics, do not process')
+
     parser.add_argument(
         '--safe-move',
         action='store_true',
@@ -3130,7 +3143,7 @@ async def main():
             
             db_session.close()
             sys.exit(0)
-            
+
         except ImportError:
             print("❌ Error: OrphanCleanupService not yet implemented (Phase 3)")
             sys.exit(1)
@@ -3139,7 +3152,219 @@ async def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
-    
+
+    # Handle --backfill-attachments
+    if args.backfill_attachments:
+        try:
+            from datetime import datetime as dt
+            from backend.core.accounts.manager import AccountManager
+            from backend.core.database import get_db
+            from backend.core.database.repository import EmailRepository
+            from backend.core.email.attachment_extractor import AttachmentExtractor, EmailNotFoundError, IMAPConnectionError
+            from backend.core.documents.attachment_indexer import AttachmentIndexer
+            from backend.core.email.models import AttachmentInfo
+
+            account_manager = AccountManager()
+            db_session = next(get_db())
+            repo = EmailRepository(db_session)
+
+            # Parse dates
+            since_date = None
+            until_date = None
+            if args.backfill_since:
+                since_date = dt.strptime(args.backfill_since, '%Y-%m-%d')
+            if args.backfill_until:
+                until_date = dt.strptime(args.backfill_until, '%Y-%m-%d')
+
+            # Determine account filter
+            account_filter = args.account if args.account else None
+
+            print(f"\n{'='*70}")
+            print(f"ATTACHMENT BACKFILL")
+            print(f"{'='*70}")
+            if since_date:
+                print(f"Since: {since_date.strftime('%Y-%m-%d')}")
+            if until_date:
+                print(f"Until: {until_date.strftime('%Y-%m-%d')}")
+            if account_filter:
+                print(f"Account: {account_filter}")
+            print(f"Include retries: {args.backfill_retry_failed}")
+            print(f"Dry run: {args.dry_run}")
+            print()
+
+            # Get stats
+            stats = repo.get_attachment_backfill_stats(
+                since_date=since_date,
+                account_id=account_filter
+            )
+
+            print(f"Emails with attachments: {stats['total_with_attachments']}")
+            print(f"  Already indexed (success): {stats['indexed_success']}")
+            print(f"  Already indexed (partial): {stats['indexed_partial']}")
+            print(f"  Failed (will retry): {stats['failed']}")
+            print(f"  Pending: {stats['pending']}")
+            print(f"  Never attempted: {stats['never_attempted']}")
+            print()
+
+            if args.backfill_stats_only:
+                db_session.close()
+                sys.exit(0)
+
+            # Get emails to process
+            limit = args.limit if args.limit else 100
+            emails = repo.get_emails_for_attachment_backfill(
+                since_date=since_date,
+                until_date=until_date,
+                limit=limit,
+                include_retries=args.backfill_retry_failed,
+                account_id=account_filter,
+            )
+
+            if not emails:
+                print("No emails need attachment indexing.")
+                db_session.close()
+                sys.exit(0)
+
+            print(f"Processing {len(emails)} emails...\n")
+
+            # Initialize attachment extractor
+            extractor = AttachmentExtractor(account_manager)
+
+            # Process each email
+            processed = 0
+            success = 0
+            failed = 0
+            skipped = 0
+
+            for idx, email_obj in enumerate(emails, 1):
+                try:
+                    account_id = email_obj.account_id or 'work'
+                    prefix = f"[{idx}/{len(emails)}]"
+
+                    # Get attachment info from stored metadata
+                    attachment_info_list = email_obj.attachment_info or []
+                    if not attachment_info_list:
+                        print(f"{prefix} {email_obj.from_address[:30]:30} - SKIP (no attachment info)")
+                        repo.update_attachment_index_status(email_obj, 'success')  # Nothing to index
+                        db_session.commit()
+                        skipped += 1
+                        continue
+
+                    print(f"{prefix} {email_obj.from_address[:30]:30} ({email_obj.date.strftime('%Y-%m-%d')}) - {len(attachment_info_list)} attachment(s)", end='', flush=True)
+
+                    if args.dry_run:
+                        print(" [DRY RUN]")
+                        continue
+
+                    # Define callback to update email location if moved
+                    def on_location_update(new_folder, new_uid):
+                        email_obj.folder = new_folder
+                        email_obj.uid = new_uid
+                        db_session.commit()
+
+                    # Fetch all attachments from IMAP
+                    try:
+                        attachments = extractor.get_all_attachments(
+                            account_id=account_id,
+                            folder=email_obj.folder,
+                            uid=email_obj.uid,
+                            message_id=email_obj.message_id,
+                            on_location_update=on_location_update
+                        )
+                    except EmailNotFoundError as e:
+                        print(f" - FAIL (email not found on IMAP)")
+                        repo.update_attachment_index_status(
+                            email_obj, 'failed', error=str(e), increment_attempts=True
+                        )
+                        db_session.commit()
+                        failed += 1
+                        continue
+                    except IMAPConnectionError as e:
+                        print(f" - FAIL (IMAP connection error)")
+                        repo.update_attachment_index_status(
+                            email_obj, 'failed', error=str(e), increment_attempts=True
+                        )
+                        db_session.commit()
+                        failed += 1
+                        continue
+
+                    if not attachments:
+                        print(f" - SKIP (no attachments found)")
+                        repo.update_attachment_index_status(email_obj, 'success')
+                        db_session.commit()
+                        skipped += 1
+                        continue
+
+                    # Convert to AttachmentInfo objects for indexer
+                    attachment_infos = []
+                    attachment_contents = []
+                    for content, filename, content_type in attachments:
+                        attachment_infos.append(AttachmentInfo(
+                            filename=filename,
+                            content_type=content_type,
+                            size=len(content),
+                            extracted_text=None,
+                            extraction_error=None
+                        ))
+                        attachment_contents.append(content)
+
+                    # Index attachments
+                    indexer = AttachmentIndexer(db_session)
+                    import asyncio
+                    results = asyncio.get_event_loop().run_until_complete(
+                        indexer.index_email_attachments(
+                            email=email_obj,
+                            attachment_infos=attachment_infos,
+                            attachment_contents=attachment_contents,
+                        )
+                    )
+
+                    indexed_count = len(results)
+                    new_count = sum(1 for _, is_new in results if is_new)
+
+                    if indexed_count > 0:
+                        print(f" - OK ({indexed_count} indexed, {new_count} new)")
+                        repo.update_attachment_index_status(email_obj, 'success')
+                        success += 1
+                    elif len(attachments) > 0:
+                        print(f" - PARTIAL (0/{len(attachments)} indexable)")
+                        repo.update_attachment_index_status(email_obj, 'partial')
+                        success += 1
+                    else:
+                        print(f" - SKIP (no indexable attachments)")
+                        repo.update_attachment_index_status(email_obj, 'success')
+                        skipped += 1
+
+                    db_session.commit()
+                    processed += 1
+
+                except Exception as e:
+                    print(f" - ERROR: {e}")
+                    logger.error(f"Error processing email {email_obj.id}: {e}", exc_info=True)
+                    repo.update_attachment_index_status(
+                        email_obj, 'failed', error=str(e), increment_attempts=True
+                    )
+                    db_session.commit()
+                    failed += 1
+
+            print(f"\n{'='*70}")
+            print(f"BACKFILL COMPLETE")
+            print(f"{'='*70}")
+            print(f"Processed: {processed}")
+            print(f"Success: {success}")
+            print(f"Failed: {failed}")
+            print(f"Skipped: {skipped}")
+            print(f"{'='*70}\n")
+
+            db_session.close()
+            sys.exit(0)
+
+        except Exception as e:
+            print(f"❌ Error during attachment backfill: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
     # Handle --all-accounts
     if args.all_accounts:
         try:

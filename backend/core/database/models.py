@@ -72,7 +72,13 @@ class Email(Base):
     has_attachments = Column(Boolean, default=False)
     attachment_count = Column(Integer, default=0)
     attachment_info = Column(JSON, default=list)  # List of attachment metadata
-    
+
+    # Attachment indexing status (for backfill tracking)
+    attachment_index_status = Column(String(20), default=None)  # None/pending/success/partial/failed
+    attachment_index_attempts = Column(Integer, default=0)
+    attachment_index_last_attempt = Column(DateTime, default=None)
+    attachment_index_error = Column(Text, default=None)  # Last error message
+
     # Headers for preprocessing
     raw_headers = Column(JSON, default=dict)
     
@@ -106,6 +112,7 @@ class Email(Base):
         Index('ix_emails_thread_id', 'thread_id'),  # For thread lookups
         Index('ix_emails_is_seen_date', 'is_seen', 'date'),  # For new email queries
         Index('ix_emails_account_message_id', 'account_id', 'message_id', unique=True),  # Unique per account
+        Index('ix_emails_attachment_backfill', 'has_attachments', 'attachment_index_status', 'date'),  # For backfill queries
     )
 
 

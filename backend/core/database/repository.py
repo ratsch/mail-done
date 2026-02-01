@@ -4,7 +4,7 @@ Database Repository - High-level database operations for email processing.
 Provides simple interface to store and retrieve emails, metadata, and classifications.
 """
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, or_
@@ -1360,4 +1360,171 @@ class EmailRepository:
         
         # All other folders: generate embeddings
         return True
+
+    def get_emails_for_attachment_backfill(
+        self,
+        since_date: Optional[datetime] = None,
+        until_date: Optional[datetime] = None,
+        limit: int = 100,
+        include_retries: bool = True,
+        account_id: Optional[str] = None,
+        max_attempts: int = 5,
+    ) -> List[Email]:
+        """
+        Get emails that need attachment indexing (for backfill).
+
+        Finds emails with attachments that haven't been indexed yet, or
+        that failed previously and are due for retry (with exponential backoff).
+
+        Backoff schedule:
+        - Attempt 2: after 1 hour
+        - Attempt 3: after 4 hours
+        - Attempt 4: after 1 day
+        - Attempt 5: after 1 week
+        - After 5: marked as 'failed', no more retries
+
+        Args:
+            since_date: Only include emails after this date
+            until_date: Only include emails before this date
+            limit: Maximum number of emails to return
+            include_retries: Include previously failed emails due for retry
+            account_id: Filter to specific account (optional)
+            max_attempts: Maximum retry attempts before permanent failure
+
+        Returns:
+            List of Email objects needing attachment indexing
+        """
+        now = datetime.utcnow()
+
+        # Build base conditions
+        conditions = [
+            Email.has_attachments == True,  # noqa: E712
+        ]
+
+        if since_date:
+            conditions.append(Email.date >= since_date)
+        if until_date:
+            conditions.append(Email.date <= until_date)
+        if account_id:
+            conditions.append(Email.account_id == account_id)
+
+        # Status conditions: never attempted OR pending OR due for retry
+        status_conditions = [
+            Email.attachment_index_status.is_(None),  # Never attempted
+            Email.attachment_index_status == 'pending',  # Queued
+        ]
+
+        if include_retries:
+            # Calculate backoff intervals for each attempt level
+            backoff_intervals = {
+                1: timedelta(hours=1),    # 2nd attempt after 1 hour
+                2: timedelta(hours=4),    # 3rd attempt after 4 hours
+                3: timedelta(days=1),     # 4th attempt after 1 day
+                4: timedelta(weeks=1),    # 5th attempt after 1 week
+            }
+
+            # Build retry condition: failed but under max attempts and backoff elapsed
+            retry_conditions = []
+            for attempts, interval in backoff_intervals.items():
+                if attempts < max_attempts:
+                    retry_conditions.append(
+                        and_(
+                            Email.attachment_index_attempts == attempts,
+                            Email.attachment_index_last_attempt < now - interval
+                        )
+                    )
+
+            if retry_conditions:
+                status_conditions.append(
+                    and_(
+                        Email.attachment_index_status.in_(['failed', 'partial']),
+                        Email.attachment_index_attempts < max_attempts,
+                        or_(*retry_conditions)
+                    )
+                )
+
+        # Combine all conditions
+        conditions.append(or_(*status_conditions))
+
+        # Query with ordering (oldest first to process chronologically)
+        query = (
+            self.db.query(Email)
+            .filter(and_(*conditions))
+            .order_by(Email.date.asc())
+            .limit(limit)
+        )
+
+        return query.all()
+
+    def update_attachment_index_status(
+        self,
+        email: Email,
+        status: str,
+        error: Optional[str] = None,
+        increment_attempts: bool = False,
+    ) -> None:
+        """
+        Update the attachment indexing status for an email.
+
+        Args:
+            email: Email to update
+            status: New status ('pending', 'success', 'partial', 'failed')
+            error: Error message if failed
+            increment_attempts: Whether to increment the attempt counter
+        """
+        email.attachment_index_status = status
+        email.attachment_index_last_attempt = datetime.utcnow()
+
+        if error:
+            email.attachment_index_error = error[:2000]  # Truncate long errors
+
+        if increment_attempts:
+            email.attachment_index_attempts = (email.attachment_index_attempts or 0) + 1
+
+        email.updated_at = datetime.utcnow()
+
+    def get_attachment_backfill_stats(
+        self,
+        since_date: Optional[datetime] = None,
+        account_id: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Get statistics about attachment indexing status.
+
+        Args:
+            since_date: Only count emails after this date
+            account_id: Filter to specific account (optional)
+
+        Returns:
+            Dict with counts: total_with_attachments, indexed, pending, failed, never_attempted
+        """
+        from sqlalchemy import func
+
+        conditions = [Email.has_attachments == True]  # noqa: E712
+        if since_date:
+            conditions.append(Email.date >= since_date)
+        if account_id:
+            conditions.append(Email.account_id == account_id)
+
+        # Base query
+        base_query = self.db.query(func.count(Email.id)).filter(and_(*conditions))
+
+        # Total with attachments
+        total = base_query.scalar() or 0
+
+        # By status
+        success = base_query.filter(Email.attachment_index_status == 'success').scalar() or 0
+        partial = base_query.filter(Email.attachment_index_status == 'partial').scalar() or 0
+        failed = base_query.filter(Email.attachment_index_status == 'failed').scalar() or 0
+        pending = base_query.filter(Email.attachment_index_status == 'pending').scalar() or 0
+        never_attempted = base_query.filter(Email.attachment_index_status.is_(None)).scalar() or 0
+
+        return {
+            'total_with_attachments': total,
+            'indexed_success': success,
+            'indexed_partial': partial,
+            'failed': failed,
+            'pending': pending,
+            'never_attempted': never_attempted,
+        }
 
