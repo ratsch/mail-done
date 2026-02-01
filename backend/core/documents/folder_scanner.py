@@ -332,6 +332,7 @@ class FolderScanner:
         extract_text: bool = True,
         progress_callback: Optional[callable] = None,
         reindex: bool = False,
+        commit_interval: int = 50,
     ) -> ScanResult:
         """
         Scan a folder and register discovered documents.
@@ -343,6 +344,7 @@ class FolderScanner:
             extract_text: If True, extract text from documents immediately (default: True)
             progress_callback: Optional callback(file_info, result) for progress
             reindex: If True, re-extract text and regenerate embeddings for existing documents
+            commit_interval: Commit to database every N files (default: 50). Set to 0 to disable.
 
         Returns:
             ScanResult with scan statistics
@@ -352,6 +354,7 @@ class FolderScanner:
 
         result = ScanResult()
         processed_count = 0
+        files_since_commit = 0
         reindexed_document_ids = set()  # Track already reindexed documents to avoid duplicates
 
         for file_info in self.discover_files(config):
@@ -584,6 +587,17 @@ class FolderScanner:
 
                 result.files_processed += 1
                 processed_count += 1
+                files_since_commit += 1
+
+                # Batch commit to make progress visible and recoverable
+                if not dry_run and commit_interval > 0 and files_since_commit >= commit_interval:
+                    try:
+                        self.processor.repository.db.commit()
+                        logger.info(f"Committed batch of {files_since_commit} files (total: {processed_count})")
+                        files_since_commit = 0
+                    except Exception as e:
+                        logger.error(f"Batch commit failed: {e}")
+                        # Continue processing - will retry commit on next interval
 
                 # Update cache
                 if self.cache:

@@ -183,6 +183,11 @@ async def scan_folder(args):
     else:
         logger.info("Embedding generation: DISABLED")
 
+    if args.commit_interval > 0:
+        logger.info(f"Batch commits: every {args.commit_interval} files")
+    else:
+        logger.info("Batch commits: DISABLED (commit only at end)")
+
     result = await scanner.scan(
         config=scan_config,
         limit=args.limit,
@@ -190,13 +195,14 @@ async def scan_folder(args):
         extract_text=extract_text,
         progress_callback=progress_callback if not args.quiet else None,
         reindex=args.reindex,
+        commit_interval=args.commit_interval,
     )
 
-    # Commit changes
+    # Final commit for any remaining uncommitted files
     if not args.dry_run:
         try:
             db.commit()
-            logger.info("Changes committed to database")
+            logger.info("Final commit completed")
         except Exception as e:
             logger.error(f"Failed to commit changes: {e}")
             db.rollback()
@@ -361,6 +367,12 @@ Examples:
         "--reindex",
         action="store_true",
         help="Re-extract text and regenerate embeddings for already indexed documents",
+    )
+    parser.add_argument(
+        "--commit-interval",
+        type=int,
+        default=50,
+        help="Commit to database every N files (default: 50). Set to 0 to commit only at end.",
     )
     parser.add_argument(
         "--detect-deleted",
