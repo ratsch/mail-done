@@ -1303,61 +1303,106 @@ class EmailAPIClient:
                 )
                 cache_path.unlink()
 
-        # Download from backend
-        url = f"/api/documents/{document_id}/content"
-        params = {
-            "origin_index": origin_index,
-            "fallback": str(fallback).lower()
-        }
-        download_timeout = int(os.getenv("MCP_ATTACHMENT_DOWNLOAD_TIMEOUT", "120"))
-
-        content_type = None
-
-        try:
-            async with httpx.AsyncClient(timeout=download_timeout, verify=not MCP_SKIP_SSL_VERIFY) as http_client:
-                full_url = urljoin(self.base_url + "/", url.lstrip('/'))
-
-                # Build headers with signing if available
-                headers = dict(self.headers)
-                if self._use_signing:
-                    # Build path with query params for signing
-                    signing_path = f"/{url.lstrip('/')}?origin_index={origin_index}&fallback={str(fallback).lower()}"
-                    sign_headers = self._sign_request("GET", signing_path, b"")
-                    headers.update(sign_headers)
-
-                response = await http_client.get(full_url, headers=headers, params=params)
-
-                # Handle HTTP errors
-                if response.status_code == 404:
-                    return {"error": "Document not found or no accessible origins"}
-                elif response.status_code == 403:
-                    return {"error": "Access denied"}
-                elif response.status_code == 503:
-                    return {"error": "Origin temporarily unavailable"}
-
-                response.raise_for_status()
-                content_type = response.headers.get('Content-Type')
-
-                # Write file
-                with open(cache_path, 'wb') as f:
-                    f.write(response.content)
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error downloading document: {e.response.status_code} - {e.response.text}")
-            return {"error": f"Backend error: {e.response.status_code}"}
-        except httpx.RequestError as e:
-            logger.error(f"Request error downloading document: {e}")
-            return {"error": f"Failed to connect to backend: {str(e)}"}
-        except Exception as e:
-            logger.error(f"Unexpected error downloading document: {e}", exc_info=True)
-            return {"error": f"Download failed: {str(e)}"}
-
-        # Determine which origin was used (based on fallback order)
+        # Try local file access first if origin is on this machine
+        import socket
+        local_hostname = socket.gethostname()
+        # Also check without .local suffix for macOS
+        local_hostname_short = local_hostname.replace(".local", "")
+        local_file_path = None
         origin_info = "unknown"
-        if locations:
-            # The backend tries origins in order, primary first
-            loc = locations[min(origin_index, len(locations) - 1)] if not fallback else locations[0]
-            origin_info = f"{loc.get('type', 'unknown')}:{loc.get('host', 'unknown')}:{loc.get('path', '')}"
+
+        for loc in locations:
+            loc_host = loc.get("host", "")
+            loc_path = loc.get("path", "")
+            loc_filename = loc.get("filename", "")
+
+            # Check if this origin is on the local machine
+            # Handle hostname variations (with/without .local suffix)
+            is_local = (
+                loc_host in (local_hostname, local_hostname_short, "localhost", "127.0.0.1") or
+                loc_host.replace(".local", "") == local_hostname_short
+            )
+            if is_local:
+                # Build full path - path may already include filename
+                if loc_path:
+                    full_path = Path(loc_path)
+                    # If path doesn't exist but is a directory path + filename, try that
+                    if not full_path.exists() and loc_filename:
+                        alt_path = full_path / loc_filename
+                        if alt_path.exists():
+                            full_path = alt_path
+                else:
+                    continue
+
+                if full_path.exists() and full_path.is_file():
+                    local_file_path = full_path
+                    origin_info = f"{loc.get('type', 'folder')}:{loc_host}:{full_path}"
+                    logger.info(f"Found local file: {full_path}")
+                    break
+
+        content_type = doc_result.get("mime_type")
+
+        if local_file_path:
+            # Read file directly from local filesystem
+            try:
+                import shutil
+                shutil.copy2(local_file_path, cache_path)
+                logger.info(f"Copied local file to cache: {cache_path}")
+            except Exception as e:
+                logger.error(f"Failed to copy local file: {e}")
+                return {"error": f"Failed to read local file: {str(e)}"}
+        else:
+            # Download from backend API (for remote files)
+            url = f"/api/documents/{document_id}/content"
+            params = {
+                "origin_index": origin_index,
+                "fallback": str(fallback).lower()
+            }
+            download_timeout = int(os.getenv("MCP_ATTACHMENT_DOWNLOAD_TIMEOUT", "120"))
+
+            try:
+                async with httpx.AsyncClient(timeout=download_timeout, verify=not MCP_SKIP_SSL_VERIFY) as http_client:
+                    full_url = urljoin(self.base_url + "/", url.lstrip('/'))
+
+                    # Build headers with signing if available
+                    headers = dict(self.headers)
+                    if self._use_signing:
+                        # Build path with query params for signing
+                        signing_path = f"/{url.lstrip('/')}?origin_index={origin_index}&fallback={str(fallback).lower()}"
+                        sign_headers = self._sign_request("GET", signing_path, b"")
+                        headers.update(sign_headers)
+
+                    response = await http_client.get(full_url, headers=headers, params=params)
+
+                    # Handle HTTP errors
+                    if response.status_code == 404:
+                        return {"error": "Document not found or no accessible origins"}
+                    elif response.status_code == 403:
+                        return {"error": "Access denied"}
+                    elif response.status_code == 503:
+                        return {"error": "Origin temporarily unavailable"}
+
+                    response.raise_for_status()
+                    content_type = response.headers.get('Content-Type') or content_type
+
+                    # Write file
+                    with open(cache_path, 'wb') as f:
+                        f.write(response.content)
+
+                    # Determine which origin was used
+                    if locations:
+                        loc = locations[min(origin_index, len(locations) - 1)] if not fallback else locations[0]
+                        origin_info = f"{loc.get('type', 'unknown')}:{loc.get('host', 'unknown')}:{loc.get('path', '')}"
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error downloading document: {e.response.status_code} - {e.response.text}")
+                return {"error": f"Backend error: {e.response.status_code}"}
+            except httpx.RequestError as e:
+                logger.error(f"Request error downloading document: {e}")
+                return {"error": f"Failed to connect to backend: {str(e)}"}
+            except Exception as e:
+                logger.error(f"Unexpected error downloading document: {e}", exc_info=True)
+                return {"error": f"Download failed: {str(e)}"}
 
         return {
             "success": True,
