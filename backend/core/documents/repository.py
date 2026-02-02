@@ -191,6 +191,7 @@ class DocumentRepository:
         page_count: Optional[int] = None,
         title: Optional[str] = None,
         summary: Optional[str] = None,
+        is_image_only: Optional[bool] = None,
     ) -> Optional[Document]:
         """
         Update document with extraction results.
@@ -206,6 +207,7 @@ class DocumentRepository:
             page_count: Number of pages
             title: Extracted or derived title
             summary: One-line summary
+            is_image_only: File is all images, no native text (for OCR marking)
 
         Returns:
             Updated Document or None if not found
@@ -228,6 +230,8 @@ class DocumentRepository:
             document.title = title
         if summary is not None:
             document.summary = summary
+        if is_image_only is not None:
+            document.is_image_only = is_image_only
 
         logger.info(f"Updated extraction for document {document_id}: status={extraction_status.value}")
         return document

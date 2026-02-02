@@ -3153,8 +3153,8 @@ async def main():
             traceback.print_exc()
             sys.exit(1)
 
-    # Handle --backfill-attachments
-    if args.backfill_attachments:
+    # Handle --backfill-attachments (or --backfill-stats-only)
+    if args.backfill_attachments or args.backfill_stats_only:
         try:
             from datetime import datetime as dt
             from backend.core.accounts.manager import AccountManager
@@ -3311,13 +3311,10 @@ async def main():
 
                     # Index attachments
                     indexer = AttachmentIndexer(db_session)
-                    import asyncio
-                    results = asyncio.get_event_loop().run_until_complete(
-                        indexer.index_email_attachments(
-                            email=email_obj,
-                            attachment_infos=attachment_infos,
-                            attachment_contents=attachment_contents,
-                        )
+                    results = await indexer.index_email_attachments(
+                        email=email_obj,
+                        attachment_infos=attachment_infos,
+                        attachment_contents=attachment_contents,
                     )
 
                     indexed_count = len(results)

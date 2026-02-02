@@ -174,7 +174,7 @@ class AttachmentExtractor:
                     # If found in different location, call update callback
                     if (actual_folder != folder or str(actual_uid) != str(uid)) and on_location_update:
                         logger.info(
-                            f"Email moved: {folder}/{uid} -> {actual_folder}/{actual_uid}"
+                            f"Email location updated: {folder}/{uid} -> {actual_folder}/{actual_uid}"
                         )
                         on_location_update(actual_folder, str(actual_uid))
                     
@@ -255,7 +255,7 @@ class AttachmentExtractor:
                     # If found in different location, call update callback
                     if (actual_folder != folder or str(actual_uid) != str(uid)) and on_location_update:
                         logger.info(
-                            f"Email moved: {folder}/{uid} -> {actual_folder}/{actual_uid}"
+                            f"Email location updated: {folder}/{uid} -> {actual_folder}/{actual_uid}"
                         )
                         on_location_update(actual_folder, str(actual_uid))
 

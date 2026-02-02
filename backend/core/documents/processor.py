@@ -318,6 +318,88 @@ class DocumentProcessor:
             # Fall back to regular extraction
             return await self.extract_text(document, file_content)
 
+    async def process_document_content(
+        self,
+        document: Document,
+        file_content: bytes,
+        use_structure: bool = False,
+    ) -> ExtractionResult:
+        """
+        Process document content: analyze, extract text, and update database.
+
+        This is the main entry point for processing document content. It:
+        1. Analyzes content for OCR detection (has_images, ocr_recommended, etc.)
+        2. Stores content analysis in database
+        3. Extracts text (with structure if requested)
+        4. Updates extraction status in database
+
+        Use this method instead of extract_text() when you want the full
+        processing workflow with content analysis and database updates.
+
+        Args:
+            document: Document to process
+            file_content: Binary content of the file
+            use_structure: If True, use structured extraction for multi-page docs
+
+        Returns:
+            ExtractionResult with text and metadata
+        """
+        from backend.core.documents.content_analyzer import analyze_content
+
+        # Step 1: Analyze content for OCR detection
+        content_analysis = analyze_content(
+            file_content,
+            document.mime_type,
+            filename=document.original_filename,
+        )
+
+        # Step 2: Store content analysis
+        await self.repository.update_content_analysis(
+            document_id=document.id,
+            has_images=content_analysis.has_images,
+            has_native_text=content_analysis.has_native_text,
+            is_image_only=content_analysis.is_image_only,
+            is_scanned_with_ocr=content_analysis.is_scanned_with_ocr,
+            ocr_recommended=content_analysis.ocr_recommended,
+            text_source='native' if content_analysis.has_native_text else 'none',
+        )
+
+        # Step 3: Extract text
+        if use_structure:
+            extraction_result = await self.extract_with_structure(document, file_content)
+        else:
+            extraction_result = await self.extract_text(document, file_content)
+
+        # Step 4: Update extraction status in database
+        if extraction_result and extraction_result.text:
+            await self.repository.update_extraction(
+                document_id=document.id,
+                extracted_text=extraction_result.text,
+                extraction_status=ExtractionStatus.COMPLETED,
+                extraction_method=extraction_result.method,
+                extraction_quality=extraction_result.quality_score,
+                page_count=extraction_result.page_count,
+            )
+
+            # Store structured data if available
+            if extraction_result.has_structure:
+                await self.repository.store_extraction_structure(
+                    document_id=document.id,
+                    pages=extraction_result.pages,
+                    sheets=extraction_result.sheets,
+                    sections=extraction_result.sections,
+                )
+        else:
+            await self.repository.update_extraction(
+                document_id=document.id,
+                extracted_text=None,
+                extraction_status=ExtractionStatus.NO_CONTENT,
+                extraction_method=extraction_result.method if extraction_result else 'none',
+                extraction_quality=0.0,
+            )
+
+        return extraction_result
+
     def _score_quality(self, text: str) -> float:
         """
         Score the quality of extracted text.

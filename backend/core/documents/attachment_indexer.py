@@ -10,7 +10,6 @@ extraction and embedding generation.
 import hashlib
 import logging
 import os
-import tempfile
 from typing import List, Optional, Tuple
 from datetime import datetime
 from uuid import UUID
@@ -38,6 +37,23 @@ EXTRACTABLE_TYPES = {
 # File extensions that can be extracted
 EXTRACTABLE_EXTENSIONS = {'.pdf', '.docx', '.xlsx', '.pptx', '.rtf', '.txt', '.csv', '.ics', '.ical'}
 
+# Image types that may contain real content (screenshots, diagrams, photos)
+# Only indexed if size > IMAGE_MIN_SIZE_BYTES to exclude small logos/icons
+IMAGE_TYPES = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'image/tiff': '.tiff',
+    'image/bmp': '.bmp',
+}
+
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.tiff', '.tif', '.bmp'}
+
+# Minimum size for images to be indexed (100KB) - smaller images are likely logos/icons
+IMAGE_MIN_SIZE_BYTES = 100 * 1024  # 100KB
+
 
 class AttachmentIndexer:
     """
@@ -52,21 +68,15 @@ class AttachmentIndexer:
     6. Generate embedding for search
     """
 
-    def __init__(
-        self,
-        db: Session,
-        embedding_model: str = "text-embedding-3-large",
-    ):
+    def __init__(self, db: Session):
         """
         Initialize attachment indexer.
 
         Args:
             db: Database session
-            embedding_model: Model for generating embeddings (default: text-embedding-3-large)
         """
         self.db = db
         self.repo = DocumentRepository(db)
-        self.embedding_model = embedding_model
 
         # Lazy-load processor and embedding service
         self._processor = None
@@ -85,26 +95,61 @@ class AttachmentIndexer:
         """Lazy load embedding service."""
         if self._embedding_service is None:
             from backend.core.documents.embeddings import DocumentEmbeddingService
-            self._embedding_service = DocumentEmbeddingService(self.repo, model=self.embedding_model)
+            self._embedding_service = DocumentEmbeddingService(self.repo, single_embedding=True)
         return self._embedding_service
 
-    def is_indexable(self, filename: str, content_type: Optional[str] = None) -> bool:
+    def is_indexable(self, filename: str, content_type: Optional[str] = None, size: Optional[int] = None) -> bool:
         """
-        Check if a file can be indexed (has extractable text).
+        Check if a file can be indexed (has extractable text or is a large image for OCR).
+
+        Args:
+            filename: Filename with extension
+            content_type: MIME type
+            size: File size in bytes (required for image size check)
+
+        Returns:
+            True if file can be indexed
+        """
+        # Check text-extractable types first
+        if content_type and content_type in EXTRACTABLE_TYPES:
+            return True
+
+        if filename:
+            ext = os.path.splitext(filename.lower())[1]
+            if ext in EXTRACTABLE_EXTENSIONS:
+                return True
+
+        # Check for large images (may contain real content for OCR)
+        is_image = False
+        if content_type and content_type in IMAGE_TYPES:
+            is_image = True
+        elif filename:
+            ext = os.path.splitext(filename.lower())[1]
+            if ext in IMAGE_EXTENSIONS:
+                is_image = True
+
+        if is_image and size is not None and size >= IMAGE_MIN_SIZE_BYTES:
+            return True
+
+        return False
+
+    def is_image_for_ocr(self, filename: str, content_type: Optional[str] = None) -> bool:
+        """
+        Check if a file is an image type that would need OCR.
 
         Args:
             filename: Filename with extension
             content_type: MIME type
 
         Returns:
-            True if file can be indexed
+            True if file is an image type
         """
-        if content_type and content_type in EXTRACTABLE_TYPES:
+        if content_type and content_type in IMAGE_TYPES:
             return True
 
         if filename:
             ext = os.path.splitext(filename.lower())[1]
-            return ext in EXTRACTABLE_EXTENSIONS
+            return ext in IMAGE_EXTENSIONS
 
         return False
 
@@ -144,17 +189,22 @@ class AttachmentIndexer:
                 logger.debug(f"Skipping empty attachment {info.filename}")
                 continue
 
-            if not self.is_indexable(info.filename, info.content_type):
-                logger.debug(f"Skipping non-indexable attachment {info.filename}")
+            content_size = len(content)
+            if not self.is_indexable(info.filename, info.content_type, size=content_size):
+                logger.debug(f"Skipping non-indexable attachment {info.filename} ({content_size} bytes)")
                 continue
 
             try:
+                # Check if this is an image (for OCR marking)
+                is_image = self.is_image_for_ocr(info.filename, info.content_type)
+
                 result = await self._index_single_attachment(
                     email=email,
                     info=info,
                     content=content,
                     attachment_index=idx,
                     skip_if_exists=skip_if_exists,
+                    is_image=is_image,
                 )
                 if result:
                     results.append(result)
@@ -171,6 +221,7 @@ class AttachmentIndexer:
         content: bytes,
         attachment_index: int,
         skip_if_exists: bool = True,
+        is_image: bool = False,
     ) -> Optional[Tuple[Document, bool]]:
         """
         Index a single attachment.
@@ -205,16 +256,26 @@ class AttachmentIndexer:
             origin_filename=info.filename,
         )
 
-        # Extract text if needed
+        # Extract text if needed (or mark for OCR if image)
         needs_extraction = is_new or document.extraction_status in (None, 'pending', ExtractionStatus.PENDING.value)
         if needs_extraction or not skip_if_exists:
-            await self._extract_and_store_text(document, content, info)
+            if is_image:
+                # Large images are indexed but need OCR later
+                await self.repo.update_extraction(
+                    document_id=document.id,
+                    extracted_text=None,
+                    extraction_status=ExtractionStatus.NEEDS_OCR,
+                    extraction_method='pending_ocr',
+                )
+                logger.info(f"Indexed image {info.filename} ({len(content)} bytes) - marked for OCR")
+            else:
+                await self._extract_and_store_text(document, content, info)
 
         # Refresh document after extraction
         document = await self.repo.get_by_id(document.id)
 
         # Generate embedding if we have text
-        if document and document.extracted_text and document.extraction_status == ExtractionStatus.SUCCESS.value:
+        if document and document.extracted_text and document.extraction_status == ExtractionStatus.COMPLETED.value:
             await self._generate_embedding(document)
 
         return document, is_new
@@ -228,73 +289,28 @@ class AttachmentIndexer:
         """
         Extract text from document content and store in database.
 
-        Uses a temporary file approach since extractors typically work with files.
+        Uses the same processing as folder_scanner via processor.process_document_content().
         """
-        # Create a temporary file to write the content
-        suffix = os.path.splitext(info.filename)[1] if info.filename else ''
-        if not suffix and info.content_type:
-            suffix = EXTRACTABLE_TYPES.get(info.content_type, '')
-
         try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
-                tmp_file.write(content)
-                tmp_path = tmp_file.name
+            result = await self.processor.process_document_content(
+                document=document,
+                file_content=content,
+                use_structure=False,  # Simple single embedding for attachments
+            )
 
-            try:
-                # Use the processor's extractor
-                if self.processor.extractor:
-                    extraction_result = await self.processor.extractor.extract_text(tmp_path)
-
-                    if extraction_result and extraction_result.text:
-                        await self.repo.update_extraction(
-                            document_id=document.id,
-                            extracted_text=extraction_result.text,
-                            extraction_status=ExtractionStatus.SUCCESS,
-                            extraction_method=extraction_result.method,
-                            extraction_quality=extraction_result.quality_score,
-                            page_count=extraction_result.page_count,
-                        )
-                        logger.info(f"Extracted {len(extraction_result.text)} chars from {info.filename}")
-                    else:
-                        await self.repo.update_extraction(
-                            document_id=document.id,
-                            extracted_text='',
-                            extraction_status=ExtractionStatus.NO_CONTENT,
-                            extraction_method='sandboxed',
-                        )
-                        logger.debug(f"No text content in {info.filename}")
-                else:
-                    # Fallback: try simple text extraction for plain text files
-                    if info.content_type in ('text/plain', 'text/csv') or suffix in ('.txt', '.csv'):
-                        text = content.decode('utf-8', errors='replace')
-                        await self.repo.update_extraction(
-                            document_id=document.id,
-                            extracted_text=text,
-                            extraction_status=ExtractionStatus.SUCCESS,
-                            extraction_method='direct',
-                        )
-                        logger.info(f"Extracted {len(text)} chars from {info.filename} (direct)")
-                    else:
-                        await self.repo.update_extraction(
-                            document_id=document.id,
-                            extracted_text=None,
-                            extraction_status=ExtractionStatus.FAILED,
-                            extraction_method='none',
-                        )
-                        logger.warning(f"No extractor available for {info.filename}")
-            finally:
-                # Clean up temp file
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+            if result and result.text:
+                logger.info(f"Extracted {len(result.text)} chars from {info.filename}")
+            else:
+                logger.debug(f"No text content in {info.filename}")
 
         except Exception as e:
-            error_msg = str(e)[:500]
             logger.error(f"Extraction failed for {info.filename}: {e}")
             await self.repo.update_extraction(
                 document_id=document.id,
                 extracted_text=None,
                 extraction_status=ExtractionStatus.FAILED,
                 extraction_method='error',
+                extraction_quality=0.0,
             )
 
     async def _generate_embedding(self, document: Document):
@@ -312,7 +328,7 @@ class AttachmentIndexer:
                 document,
                 single_embedding=True,  # Simple single embedding for attachments
             )
-            logger.info(f"Generated embedding for document {document.id}: {document.filename} ({result.embeddings_generated} embeddings)")
+            logger.info(f"Generated embedding for document {document.id}: {document.original_filename} ({result.embeddings_created} embeddings)")
 
         except Exception as e:
             logger.error(f"Embedding generation failed for {document.id}: {e}")

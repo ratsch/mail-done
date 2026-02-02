@@ -54,13 +54,14 @@ class ExtractionStatus(str, enum.Enum):
     """
     Document text extraction lifecycle states.
 
-    pending -> processing -> completed | no_content | failed
+    pending -> processing -> completed | no_content | failed | needs_ocr
     """
     PENDING = "pending"           # Queued for extraction
     PROCESSING = "processing"     # Worker is extracting
     COMPLETED = "completed"       # Has text, quality scored
     NO_CONTENT = "no_content"     # Processed, no extractable text (image, empty file)
     FAILED = "failed"             # Extraction failed (will retry)
+    NEEDS_OCR = "needs_ocr"       # Image file indexed, awaiting OCR batch processing
 
 
 class Document(Base):
