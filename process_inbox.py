@@ -3225,7 +3225,8 @@ async def main():
                 db_session.close()
                 sys.exit(0)
 
-            print(f"Processing {len(emails)} emails...\n")
+            total_emails = len(emails)
+            print(f"Processing {total_emails} emails...\n")
 
             # Initialize attachment extractor
             extractor = AttachmentExtractor(account_manager)
@@ -3235,6 +3236,11 @@ async def main():
             success = 0
             failed = 0
             skipped = 0
+
+            # Timing for ETA
+            import time
+            start_time = time.time()
+            progress_interval = 50  # Show summary every N emails
 
             for idx, email_obj in enumerate(emails, 1):
                 try:
@@ -3344,6 +3350,34 @@ async def main():
                     db_session.commit()
                     failed += 1
 
+                # Show periodic progress summary with ETA
+                if idx % progress_interval == 0 or idx == total_emails:
+                    elapsed = time.time() - start_time
+                    rate = idx / elapsed if elapsed > 0 else 0
+                    remaining = total_emails - idx
+                    eta_seconds = remaining / rate if rate > 0 else 0
+
+                    # Format ETA
+                    if eta_seconds < 60:
+                        eta_str = f"{int(eta_seconds)}s"
+                    elif eta_seconds < 3600:
+                        eta_str = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s"
+                    else:
+                        eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
+
+                    print(f"\n  ── Progress: {idx}/{total_emails} ({100*idx//total_emails}%) | "
+                          f"Success: {success} | Failed: {failed} | Skipped: {skipped} | "
+                          f"Rate: {rate:.1f}/s | ETA: {eta_str} ──\n")
+
+            # Final summary
+            total_time = time.time() - start_time
+            if total_time < 60:
+                time_str = f"{total_time:.1f}s"
+            elif total_time < 3600:
+                time_str = f"{int(total_time // 60)}m {int(total_time % 60)}s"
+            else:
+                time_str = f"{int(total_time // 3600)}h {int((total_time % 3600) // 60)}m"
+
             print(f"\n{'='*70}")
             print(f"BACKFILL COMPLETE")
             print(f"{'='*70}")
@@ -3351,6 +3385,7 @@ async def main():
             print(f"Success: {success}")
             print(f"Failed: {failed}")
             print(f"Skipped: {skipped}")
+            print(f"Time: {time_str}")
             print(f"{'='*70}\n")
 
             db_session.close()
