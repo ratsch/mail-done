@@ -160,6 +160,10 @@ Returns email summaries with similarity scores.""",
                         "enum": ["semantic", "keyword", "hybrid"],
                         "description": "Search mode: 'semantic' (meaning, recommended), 'keyword' (subject only), 'hybrid' (both). Note: keyword search on encrypted bodies is slow.",
                         "default": "semantic"
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Filter by sender email address or name (partial match supported, e.g., 'john.doe' or 'stanford.edu')"
                     }
                 },
                 "required": ["query"]
@@ -853,7 +857,8 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
                     category=arguments.get("category"),
                     date_from=arguments.get("date_from"),
                     date_to=arguments.get("date_to"),
-                    mode=arguments.get("mode", "semantic")
+                    mode=arguments.get("mode", "semantic"),
+                    sender=arguments.get("sender")
                 )
             
             elif name == "search_by_sender":

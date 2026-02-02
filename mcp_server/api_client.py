@@ -266,15 +266,16 @@ class EmailAPIClient:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         vip_only: bool = False,
-        needs_reply: Optional[bool] = None
+        needs_reply: Optional[bool] = None,
+        sender: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Search emails semantically via backend API.
-        
+
         NOTE: MCP restrictions automatically applied:
         - Date filtered to last {MCP_DATE_LIMIT_DAYS} days
         - Account filtered to {MCP_ALLOWED_ACCOUNT} (if configured)
-        
+
         Calls: GET /api/search
         """
         params = {
@@ -285,16 +286,18 @@ class EmailAPIClient:
             "date_from": date_from,
             "date_to": date_to
         }
-        
+
         # Apply MCP restrictions (date and account filters)
         params = self._apply_mcp_restrictions(params)
-        
+
         if category:
             params["category"] = category
         if vip_only:
             params["vip_only"] = "true"
         if needs_reply is not None:
             params["needs_reply"] = str(needs_reply).lower()
+        if sender:
+            params["sender"] = sender
         
         result = await self._request("GET", "/api/search", params=params)
         
