@@ -162,14 +162,30 @@ class DocumentEmbeddingService:
                 text = text[:MAX_CHARS_PER_CHUNK] + "..."
             parts.append(text)
 
-        # Get primary origin path for context
+        # Get primary origin for context
         if document.origins:
             primary = next(
                 (o for o in document.origins if o.is_primary),
                 document.origins[0] if document.origins else None
             )
-            if primary and primary.origin_path:
-                parts.append(f"Location: {primary.origin_path}")
+            if primary:
+                if primary.origin_path:
+                    # File from folder
+                    parts.append(f"Location: {primary.origin_path}")
+                elif primary.origin_type == 'email_attachment' and primary.email:
+                    # Email attachment - include email context
+                    email = primary.email
+                    email_context = []
+                    if email.subject:
+                        email_context.append(f"Email subject: {email.subject}")
+                    if email.from_address:
+                        email_context.append(f"From: {email.from_address}")
+                    if email.folder:
+                        email_context.append(f"Email folder: {email.folder}")
+                    if email.date:
+                        email_context.append(f"Email date: {email.date.strftime('%Y-%m-%d')}")
+                    if email_context:
+                        parts.append("\n".join(email_context))
 
         return "\n\n".join(parts)
 
