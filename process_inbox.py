@@ -3211,12 +3211,11 @@ async def main():
                 db_session.close()
                 sys.exit(0)
 
-            # Get emails to process
-            limit = args.limit if args.limit else 100
+            # Get emails to process (no limit by default, use --limit to restrict)
             emails = repo.get_emails_for_attachment_backfill(
                 since_date=since_date,
                 until_date=until_date,
-                limit=limit,
+                limit=args.limit,  # None = no limit
                 include_retries=args.backfill_retry_failed,
                 account_id=account_filter,
             )

@@ -1365,7 +1365,7 @@ class EmailRepository:
         self,
         since_date: Optional[datetime] = None,
         until_date: Optional[datetime] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
         include_retries: bool = True,
         account_id: Optional[str] = None,
         max_attempts: int = 5,
@@ -1451,8 +1451,10 @@ class EmailRepository:
             self.db.query(Email)
             .filter(and_(*conditions))
             .order_by(Email.date.asc())
-            .limit(limit)
         )
+
+        if limit:
+            query = query.limit(limit)
 
         return query.all()
 
