@@ -159,6 +159,155 @@ python3.11 process_inbox.py --skip-ai --limit 500
 python3.11 process_inbox.py --actions-only
 ```
 
+---
+
+## Attachment Indexing
+
+Index email attachments as searchable documents. This enables unified search across email text and attachments.
+
+### How It Works
+
+1. Attachments are fetched from IMAP server
+2. Text is extracted (PDF, Office docs, etc.)
+3. Documents are deduplicated by SHA-256 checksum
+4. Embeddings are generated for semantic search
+5. Origin type is set to `email_attachment`
+
+### Backfill Existing Attachments
+
+Index attachments from emails already in the database:
+
+```bash
+# Show statistics only (no processing)
+python3.11 process_inbox.py --backfill-stats-only
+
+# Output:
+# Emails with attachments: 2,500
+#   Already indexed (success): 1,200
+#   Already indexed (partial): 150
+#   Failed (will retry): 50
+#   Pending: 300
+#   Never attempted: 800
+
+# Backfill all pending attachments
+python3.11 process_inbox.py --backfill-attachments
+
+# Backfill with date range
+python3.11 process_inbox.py --backfill-attachments \
+  --backfill-since 2024-01-01 \
+  --backfill-until 2024-12-31
+
+# Retry previously failed emails
+python3.11 process_inbox.py --backfill-attachments --backfill-retry-failed
+
+# Limit batch size
+python3.11 process_inbox.py --backfill-attachments --limit 100
+
+# Dry run (preview only)
+python3.11 process_inbox.py --backfill-attachments --dry-run
+```
+
+### Backfill Options
+
+| Option | Description |
+|--------|-------------|
+| `--backfill-attachments` | Enable attachment backfill mode |
+| `--backfill-stats-only` | Show statistics without processing |
+| `--backfill-since DATE` | Only process emails since DATE (YYYY-MM-DD) |
+| `--backfill-until DATE` | Only process emails until DATE (YYYY-MM-DD) |
+| `--backfill-retry-failed` | Include previously failed emails (respects backoff) |
+| `--limit N` | Process only N emails |
+| `--dry-run` | Preview without making changes |
+| `--account NAME` | Filter to specific email account |
+
+### Backfill Output
+
+```
+======================================================================
+ATTACHMENT BACKFILL
+======================================================================
+Since: 2024-01-01
+Account: work
+Include retries: False
+Dry run: False
+
+Emails with attachments: 500
+  Already indexed (success): 200
+  Failed (will retry): 10
+  Pending: 50
+  Never attempted: 240
+
+Processing 290 emails...
+
+[1/290] Research Paper.pdf (2.3 MB) - Indexed
+[2/290] CV_Applicant.docx (156 KB) - Indexed
+[3/290] Invoice_2024.pdf (89 KB) - Duplicate (already indexed from /Documents)
+...
+
+======================================================================
+BACKFILL COMPLETE
+======================================================================
+Processed: 290
+  Success: 280
+  Duplicates: 5
+  Failed: 5
+Time: 12m 34s
+======================================================================
+```
+
+### Search Indexed Attachments
+
+After indexing, attachments are searchable via:
+
+**MCP Tools:**
+```
+semantic_search_unified - Search emails AND documents
+semantic_document_search - Search documents only (including attachments)
+```
+
+**Web UI:**
+- Toggle "Emailed documents" checkbox in search
+
+**API:**
+```bash
+# Search all documents (including attachments)
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents/search/semantic?query=invoice+2024"
+
+# Unified search (emails + attachments + folder files)
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/search/unified?query=machine+learning"
+```
+
+### Deduplication
+
+The same file attached to multiple emails is indexed once:
+
+```
+Email 1: report.pdf (checksum abc123) → Document #1
+Email 2: report.pdf (checksum abc123) → Document #1 (new origin only)
+Email 3: report_v2.pdf (checksum def456) → Document #2
+```
+
+Each email-document link is tracked in `document_origins` with `origin_type='email_attachment'`.
+
+### Troubleshooting
+
+**"Email no longer available on IMAP server"**
+- Email was deleted or moved after being processed
+- Use `--backfill-retry-failed` to retry with fresh IMAP lookup
+
+**"Extraction failed"**
+- Check if attachment is corrupt or encrypted
+- Some formats may not be supported
+
+**Slow backfill**
+- Each email requires IMAP fetch (network I/O)
+- Use `--limit` to process in smaller batches
+- Consider running overnight for large backlogs
+
+---
+
 ## Configuration Files
 
 ### `config/vip_senders.yaml`

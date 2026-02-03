@@ -242,6 +242,240 @@ curl -H "X-API-Key: xxx" \
   "http://localhost:8000/api/costs/overview?days=30"
 ```
 
+## Document Endpoints
+
+### `GET /api/documents` - List Documents
+
+List indexed documents with pagination and filters:
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents?page=1&page_size=20&extraction_status=completed"
+```
+
+Parameters:
+- `page` (int): Page number (default: 1)
+- `page_size` (int): Items per page (default: 50, max: 100)
+- `extraction_status` (string): Filter by status (pending, processing, completed, failed)
+- `document_type` (string): Filter by AI-assigned type (invoice, contract, etc.)
+- `mime_type` (string): Filter by MIME type (application/pdf, etc.)
+- `min_quality` (float): Minimum extraction quality (0.0-1.0)
+- `search` (string): Search in title and summary
+
+### `GET /api/documents/{document_id}` - Get Document Details
+
+Returns document with all origins (locations where found).
+
+### `GET /api/documents/{document_id}/text` - Get Extracted Text
+
+Returns the extracted text content from a document.
+
+### `GET /api/documents/{document_id}/content` - Download Document
+
+Retrieves the original binary file from its stored origin.
+
+Parameters:
+- `origin_index` (int): Which origin to use (default: 0 = primary)
+- `fallback` (bool): Try other origins if first fails (default: true)
+
+### `GET /api/documents/search/semantic` - Semantic Document Search
+
+Search documents by meaning:
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents/search/semantic?query=invoice+2024&top_k=10"
+```
+
+Parameters:
+- `query` (string): Natural language search query
+- `top_k` (int): Max results (default: 10)
+- `similarity_threshold` (float): Minimum similarity (0-1, default: 0.6)
+- `document_type` (string): Filter by type
+- `date_from`, `date_to` (date): Date range filter
+
+### `GET /api/documents/search/by-name` - Search by Filename
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents/search/by-name?name=report&limit=20"
+```
+
+### `GET /api/documents/{document_id}/similar` - Find Similar Documents
+
+Find documents with similar content:
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents/{id}/similar?top_k=10"
+```
+
+### `GET /api/documents/stats` - Document Statistics
+
+Returns counts by extraction status, document type, and pending tasks.
+
+### `GET /api/documents/status` - Indexing Status
+
+Detailed indexing status by host, origin type, and OCR statistics.
+
+### `GET /api/documents/folders/list` - Browse Indexed Folder
+
+List contents of a previously indexed folder:
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/documents/folders/list?host=my-machine&folder_path=/path/to/folder"
+```
+
+**Security:** Only folders that were previously indexed can be browsed.
+
+---
+
+## Attachment Endpoints
+
+Email attachment access (requires `ENABLE_ATTACHMENT_API=true`).
+
+### `GET /api/emails/{email_id}/attachments` - List Attachments
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/emails/{email_id}/attachments"
+```
+
+Response:
+```json
+[
+  {
+    "index": 0,
+    "filename": "document.pdf",
+    "content_type": "application/pdf",
+    "size": 1048576
+  }
+]
+```
+
+### `GET /api/emails/{email_id}/attachments/{index}/download` - Download Attachment
+
+Downloads attachment binary from IMAP server.
+
+**Rate limited:** 25 downloads/minute per API key.
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/emails/{email_id}/attachments/0/download" \
+  --output document.pdf
+```
+
+Error codes:
+- `403`: Feature disabled (ENABLE_ATTACHMENT_API not set)
+- `410`: Email no longer available on IMAP server
+- `413`: Attachment exceeds size limit (default: 50MB)
+- `429`: Rate limit exceeded
+
+---
+
+## IMAP Endpoints
+
+Direct IMAP server access for live folder operations.
+
+### `GET /api/imap/folders` - List IMAP Folders
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/imap/folders?account=work"
+```
+
+Parameters:
+- `account` (string): Account nickname (default: uses default account)
+
+Response:
+```json
+{
+  "folders": ["INBOX", "Sent", "Drafts", "Archive/2024"],
+  "total": 45,
+  "account": "work"
+}
+```
+
+### `GET /api/imap/folders/{folder}/status` - Folder Status
+
+Efficient message counts via IMAP STATUS command:
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/imap/folders/INBOX/status"
+```
+
+Response:
+```json
+{
+  "folder": "INBOX",
+  "total": 350,
+  "unseen": 42,
+  "recent": 5,
+  "uidnext": 1234,
+  "uidvalidity": 1234567890,
+  "account": "work"
+}
+```
+
+### `GET /api/imap/folders/{folder}/messages` - List Folder Messages
+
+Fetch messages directly from IMAP (not from database):
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/imap/folders/INBOX/messages?limit=50&since_date=2025-01-01"
+```
+
+Parameters:
+- `limit` (int): Max messages (default: 50, max: 500)
+- `since_date` (string): Only messages since date (YYYY-MM-DD)
+- `include_headers` (bool): Include full headers (default: true)
+- `account` (string): Account nickname
+
+---
+
+## Application Review Endpoints
+
+For managing PhD, postdoc, and intern applications.
+
+### `GET /api/applications` - List Applications
+
+```bash
+curl -H "X-API-Key: xxx" \
+  "http://localhost:8000/api/applications?category=application-phd&min_recommendation_score=7"
+```
+
+Parameters:
+- `category` (string): application-phd, application-postdoc, application-intern
+- `min_recommendation_score` (int): Minimum AI score (1-10)
+- `min_excellence_score` (int): Minimum scientific excellence (1-10)
+- `min_research_fit_score` (int): Minimum research fit (1-10)
+- `search_name` (string): Search by applicant name
+- `profile_tags` (list): Filter by tags (ml-experience, genomics, etc.)
+- `application_status` (string): pending, reviewed, decided
+- `received_after`, `received_before` (date): Date range
+
+### `GET /api/applications/{email_id}` - Application Details
+
+Full application details including:
+- Applicant info (name, email, institution, nationality)
+- AI scores with reasoning
+- Technical experience scores
+- Google Drive folder links
+- Reviews and decisions
+
+### `GET /api/applications/tags` - Available Tags
+
+List all profile tags with counts.
+
+### `GET /api/applications/collections` - Application Collections
+
+List named application groups.
+
+---
+
 ## Error Handling
 
 All errors return JSON with consistent format:
