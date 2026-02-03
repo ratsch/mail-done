@@ -342,12 +342,17 @@ class InquiryTemplateLoader:
         Args:
             templates_path: Path to inquiry_templates.yaml
         """
+        import os
         import yaml
         from pathlib import Path
-        
+
         if templates_path is None:
-            # Default path relative to this file
-            templates_path = Path(__file__).parent.parent.parent.parent / "config" / "inquiry_templates.yaml"
+            # Check CONFIG_DIR overlay first, then default location
+            config_dir = os.environ.get('CONFIG_DIR')
+            if config_dir:
+                templates_path = Path(config_dir) / "inquiry_templates.yaml"
+            else:
+                templates_path = Path(__file__).parent.parent.parent.parent / "config" / "inquiry_templates.yaml"
         
         self.templates_path = Path(templates_path)
         self._templates = None

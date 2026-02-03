@@ -112,8 +112,12 @@ PI_EMAIL_ADDRESSES = frozenset(
 )
 
 # Load profile tags configuration
-# Path: backend/core/ai/prompts/application.py -> ../../../../config/profile_tags.yaml
-_config_path = Path(__file__).parent.parent.parent.parent.parent / "config" / "profile_tags.yaml"
+# Check CONFIG_DIR overlay first, then fall back to default location
+_config_dir = os.environ.get('CONFIG_DIR')
+if _config_dir:
+    _config_path = Path(_config_dir) / "profile_tags.yaml"
+else:
+    _config_path = Path(__file__).parent.parent.parent.parent.parent / "config" / "profile_tags.yaml"
 try:
     with open(_config_path, 'r') as f:
         _tags_config = yaml.safe_load(f)

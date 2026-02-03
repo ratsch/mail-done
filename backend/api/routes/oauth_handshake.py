@@ -101,8 +101,13 @@ def load_oauth_policies() -> dict:
     if _policies_cache is not None:
         return _policies_cache
     
-    config_path = Path(__file__).parents[3] / "config" / "oauth_policies.yaml"
-    
+    # Check CONFIG_DIR overlay first, then default location
+    config_dir = os.environ.get('CONFIG_DIR')
+    if config_dir:
+        config_path = Path(config_dir) / "oauth_policies.yaml"
+    else:
+        config_path = Path(__file__).parents[3] / "config" / "oauth_policies.yaml"
+
     if not config_path.exists():
         logger.warning(f"OAuth policies config not found: {config_path}")
         return {}

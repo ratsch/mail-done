@@ -373,7 +373,16 @@ class AIClassifier:
     
     def _config_exists(self) -> bool:
         """Check if model routing config file exists (NEW in v3.0)."""
+        import os
         from pathlib import Path
+        # Check CONFIG_DIR overlay first
+        config_dir = os.environ.get('CONFIG_DIR')
+        if config_dir:
+            config_path = Path(config_dir) / "model_routing.yaml"
+            local_path = Path(config_dir) / "model_routing.local.yaml"
+            if config_path.exists() or local_path.exists():
+                return True
+        # Fall back to default location
         config_path = Path(__file__).parent / "config" / "model_routing.yaml"
         local_path = config_path.with_suffix('.local.yaml')
         return config_path.exists() or local_path.exists()

@@ -118,10 +118,16 @@ def _load_config(force_reload: bool = False) -> Dict:
         if _config is not None and not force_reload:
             return _config
         
-        paths = [
+        # Check CONFIG_DIR overlay first, then default locations
+        config_dir = os.environ.get('CONFIG_DIR')
+        paths = []
+        if config_dir:
+            paths.append(Path(config_dir) / "llm_endpoints.local.yaml")
+            paths.append(Path(config_dir) / "llm_endpoints.yaml")
+        paths.extend([
             Path(__file__).parent / "config" / "llm_endpoints.local.yaml",
             Path(__file__).parent / "config" / "llm_endpoints.yaml",
-        ]
+        ])
         
         for path in paths:
             if path.exists():
