@@ -11,6 +11,56 @@ This guide covers deploying mail-done to a self-hosted server using Docker or Po
 > - [Outlook OAuth2](OUTLOOK_OAUTH2.md) - Microsoft 365 authentication
 > - [LLM Configuration](LLM_CONFIGURATION.md) - Multi-provider AI setup
 
+## Hardware Requirements
+
+mail-done is designed to run on modest hardware, including single-board computers like the Raspberry Pi.
+
+### Minimum Requirements
+
+| Component | Minimum | Recommended | Notes |
+|-----------|---------|-------------|-------|
+| **RAM** | 2GB | 4GB+ | PostgreSQL benefits from more RAM for caching |
+| **Storage** | 16GB | 32GB+ | Database grows ~1MB per 1000 emails |
+| **CPU** | ARMv8 / x86-64 | 4+ cores | Container builds are CPU-intensive |
+
+### Storage Considerations
+
+**SSD or NVMe strongly recommended over SD cards:**
+
+| Storage Type | Build Time | Database Performance | Reliability |
+|--------------|------------|---------------------|-------------|
+| **NVMe/SSD** | Fast (seconds) | Excellent | High |
+| **USB SSD** | Fast | Good | Good |
+| **SD Card** | Slow (minutes) | Marginal | Limited write cycles |
+| **HDD** | Moderate | Good | Good |
+
+For Raspberry Pi deployments:
+- **USB SSD** is the sweet spot: affordable, fast, reliable
+- **SD cards** work but are significantly slower and have limited write endurance
+- Vector similarity search and embedding generation benefit greatly from fast storage
+- Database writes (email processing) can wear out SD cards over time
+
+### Tested Platforms
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **Raspberry Pi 4 (4GB)** | Fully supported | Production-tested, USB SSD recommended |
+| **Raspberry Pi 5** | Supported | Better performance, NVMe via HAT recommended |
+| **x86-64 Linux** | Fully supported | Any modern distribution |
+| **macOS (Apple Silicon)** | Development | Works via Docker Desktop or Podman |
+| **Windows WSL2** | Development | Works via Docker Desktop |
+
+### Resource Usage (Typical)
+
+| Component | Memory | Disk | CPU (idle) |
+|-----------|--------|------|------------|
+| PostgreSQL | 200-500MB | Variable | <1% |
+| Backend API | 100-200MB | ~200MB image | <1% |
+| Web UI | 50-100MB | ~100MB image | <1% |
+| **Total** | ~500MB-1GB | ~500MB + data | <5% |
+
+During email processing (with AI classification), CPU usage will spike temporarily as embeddings are generated.
+
 ## Prerequisites
 
 - Docker or Podman with Compose support

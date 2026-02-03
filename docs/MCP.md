@@ -2,7 +2,49 @@
 
 > **Prerequisites:** [Deployment Guide](DEPLOYMENT.md) (backend must be running) | **Related:** [API Reference](API.md)
 
-The mail-done MCP (Model Context Protocol) server enables AI assistants like Claude and Cursor to search and access your email database.
+The mail-done MCP (Model Context Protocol) server enables AI assistants like Claude and Cursor to search and access your email database through natural language.
+
+## What MCP Enables
+
+With MCP configured, you can ask your AI assistant things like:
+
+- "Find emails about the CRISPR collaboration from last month"
+- "Show me PhD applications with research fit score above 8"
+- "What's in my Archive/2024 folder?"
+- "Find documents similar to this grant proposal"
+- "Download the CV from that Yale applicant"
+- "Compare these three PhD applicants"
+
+The AI assistant translates your natural language into tool calls, executes them, and summarizes the results.
+
+## Capabilities
+
+**What the MCP server CAN do:**
+
+| Capability | Tools | Description |
+|------------|-------|-------------|
+| **Semantic Email Search** | `semantic_search`, `search_by_topic` | Find emails by meaning, not just keywords |
+| **Sender Search** | `search_by_sender` | Find all emails from a person or domain |
+| **Email Details** | `get_email_details` | Read full email content, headers, AI analysis |
+| **Similar Emails** | `find_similar_emails` | Find related correspondence |
+| **Document Search** | `semantic_document_search`, `search_document_by_name` | Search indexed files |
+| **Unified Search** | `semantic_search_unified` | Search emails AND documents together |
+| **Application Review** | `list_applications`, `get_application_details` | Search and analyze PhD/postdoc applications |
+| **IMAP Access** | `list_imap_folders`, `list_imap_folder_emails` | Browse live mail folders |
+| **Attachments** | `list_attachments`, `download_attachment` | Access email attachments (when enabled) |
+| **Statistics** | `list_categories`, `list_top_senders` | Understand your email patterns |
+
+**What the MCP server CANNOT do:**
+
+| Limitation | Reason |
+|------------|--------|
+| **Send emails** | Read-only by design; no SMTP integration |
+| **Delete emails** | Safety: only non-destructive operations |
+| **Move/label emails** | Use `process_inbox.py` for IMAP actions |
+| **Modify documents** | Documents are indexed, not managed |
+| **Access unprocessed emails** | Only emails in the database are searchable |
+| **Real-time monitoring** | No push notifications; poll-based only |
+| **Access other users' email** | Single-user system per deployment |
 
 ## Overview
 

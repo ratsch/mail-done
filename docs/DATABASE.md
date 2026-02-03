@@ -173,6 +173,98 @@ API cost tracking:
 | cost | FLOAT | Computed cost |
 | created_at | TIMESTAMP | When recorded |
 
+### Document Tables
+
+#### `documents`
+
+Indexed document files:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| checksum | VARCHAR(64) | SHA-256 hash for deduplication |
+| filename | VARCHAR | Original filename |
+| mime_type | VARCHAR | MIME type |
+| size_bytes | BIGINT | File size |
+| page_count | INTEGER | Number of pages (if applicable) |
+| document_date | TIMESTAMP | File modification date |
+| extracted_text | TEXT | Extracted text content |
+| extraction_status | VARCHAR | pending/completed/failed/no_content |
+| extraction_error | TEXT | Error message if failed |
+| ocr_applied | BOOLEAN | Whether OCR was used |
+| ai_category | VARCHAR | AI-assigned document type |
+| ai_tags | JSONB | AI-assigned tags |
+| first_seen_at | TIMESTAMP | When first indexed |
+| last_seen_at | TIMESTAMP | Most recent scan |
+
+#### `document_origins`
+
+Where documents were found (supports deduplication across sources):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| document_id | UUID | Foreign key to documents |
+| origin_type | VARCHAR | folder / email_attachment |
+| host | VARCHAR | Machine hostname |
+| path | VARCHAR | Full file path |
+| email_id | UUID | Foreign key to emails (if attachment) |
+| attachment_index | INTEGER | Attachment index in email |
+| discovered_at | TIMESTAMP | When discovered |
+
+#### `document_embeddings`
+
+Vector embeddings for document search:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| document_id | UUID | Foreign key to documents |
+| embedding | vector(3072) | Embedding vector |
+| model | VARCHAR | Embedding model used |
+| chunk_index | INTEGER | Chunk number (for long docs) |
+| chunk_text | TEXT | Text that was embedded |
+| created_at | TIMESTAMP | When generated |
+
+### Application Review Tables
+
+#### `application_reviews`
+
+Reviewer ratings and comments:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| email_id | UUID | Foreign key to emails |
+| reviewer_email | VARCHAR | Reviewer's email |
+| rating | INTEGER | 1-5 rating |
+| comments | TEXT | Review comments |
+| decision | VARCHAR | accept/reject/maybe/interview |
+| created_at | TIMESTAMP | When reviewed |
+| updated_at | TIMESTAMP | Last update |
+
+#### `application_collections`
+
+Named groups of applications:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| name | VARCHAR | Collection name |
+| description | TEXT | Collection description |
+| created_by | VARCHAR | Creator's email |
+| created_at | TIMESTAMP | When created |
+
+#### `application_collection_members`
+
+Many-to-many: applications in collections:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| collection_id | UUID | Foreign key to collections |
+| email_id | UUID | Foreign key to emails |
+| added_at | TIMESTAMP | When added |
+
 ## Encryption
 
 Sensitive fields are encrypted at rest using Fernet symmetric encryption.
