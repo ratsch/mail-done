@@ -1,16 +1,26 @@
 # mail-done
 
-An AI-powered email processing system designed for academics and professionals who receive high volumes of email and need intelligent organization, search, and workflow automation.
+An AI-powered email and document processing system designed for academics and professionals who need intelligent organization, semantic search, and workflow automation across their communications and files.
+
+**mail-done** helps you manage two related problems:
+1. **Email overload** - Hundreds of emails needing classification, organization, and search
+2. **Document sprawl** - Files scattered across email attachments, local folders, and remote servers
 
 ## What This Tool Does
 
-**mail-done** connects to your email account via IMAP, downloads emails, and uses large language models (GPT-4, Claude, etc.) to automatically:
+**mail-done** connects to your email accounts and document folders, then uses large language models (GPT-4, Claude, etc.) to:
 
+**For Email:**
 1. **Classify emails** into categories (PhD applications, speaking invitations, collaboration requests, newsletters, etc.)
 2. **Score applications** with detailed AI analysis (scientific excellence, research fit, technical skills)
 3. **Organize your inbox** by moving emails to folders, adding labels, and flagging important messages
 4. **Enable semantic search** so you can find emails by meaning ("papers about single-cell RNA sequencing") rather than exact keywords
-5. **Index documents** from email attachments and local folders for unified search across all your files
+
+**For Documents:**
+5. **Index files** from email attachments, local folders, and remote servers (via SSH)
+6. **Extract text** from PDFs, Office documents, images (OCR), and other formats
+7. **Deduplicate** files across sources (same PDF attached to 10 emails = indexed once)
+8. **Unified search** across emails and documents simultaneously
 
 ### Primary Use Cases
 
@@ -23,8 +33,9 @@ An AI-powered email processing system designed for academics and professionals w
 
 - **Send emails** - This is a read-only system for processing incoming mail
 - **Replace your email client** - You still use Gmail/Outlook/Apple Mail; this runs alongside
+- **Modify your files** - Documents are indexed but never changed; originals stay where they are
 - **Require cloud hosting** - Designed for self-hosting on your own server or Raspberry Pi
-- **Store emails in the cloud** - Your emails stay in your PostgreSQL database under your control
+- **Store data in the cloud** - Your emails and document index stay in your PostgreSQL database under your control
 
 ## Features
 
