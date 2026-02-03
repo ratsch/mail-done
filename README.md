@@ -17,10 +17,10 @@ An AI-powered email and document processing system designed for academics and pr
 4. **Enable semantic search** so you can find emails by meaning ("papers about single-cell RNA sequencing") rather than exact keywords
 
 **For Documents:**
-5. **Index files** from email attachments, local folders, and remote servers (via SSH)
-6. **Extract text** from PDFs, Office documents, images (OCR), and other formats
-7. **Deduplicate** files across sources (same PDF attached to 10 emails = indexed once)
-8. **Unified search** across emails and documents simultaneously
+1. **Index files** from email attachments, local folders, and remote servers (via SSH)
+2. **Extract text** from PDFs, Office documents, images (OCR), and other formats
+3. **Deduplicate** files across sources (same PDF attached to 10 emails = indexed once)
+4. **Unified search** across emails and documents simultaneously
 
 ### Primary Use Cases
 
