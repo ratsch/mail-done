@@ -1280,7 +1280,14 @@ class EmailRepository:
                     metadata.importance_score = 7
                     metadata.email_status = 'handled'
                     metadata.status_updated_at = datetime.utcnow()
-            
+
+            # Update email's account_id and folder for cross-account moves
+            # This ensures the email won't be reprocessed when the target account is processed
+            if is_cross_account:
+                email.account_id = new_account
+                logger.info(f"Updated email account_id: {old_account} → {new_account}")
+            email.folder = new_folder
+
             self.db.flush()
             logger.info(f"Tracked folder change for {email.message_id}: {old_folder} → {new_folder} (by {moved_by})")
             
