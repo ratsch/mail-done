@@ -51,3 +51,4 @@ temp/
 # Session and auth files
 *.auth.json
 *_imports.json
+bmi-applications-11ff7a8ed7a6.json
