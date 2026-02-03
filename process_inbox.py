@@ -1315,9 +1315,16 @@ class EmailProcessingPipeline:
                 if action.folder == self._current_folder:
                     logger.debug(f"Skipping move: already in {action.folder}")
                     return True, f"ALREADY_IN:{action.folder}"
-                
+
+                # Apply default_move_target if no explicit target_account
+                if not action.target_account and self.account_manager:
+                    account_config = self.account_manager.get_account(self.account_id)
+                    if account_config and account_config.default_move_target:
+                        action.target_account = account_config.default_move_target
+                        logger.debug(f"Applied default_move_target: {action.target_account}")
+
                 # Check for cross-account move
-                if (action.target_account and 
+                if (action.target_account and
                     action.target_account != self.account_id):
                     
                     # Cross-account move requested but flag not enabled
