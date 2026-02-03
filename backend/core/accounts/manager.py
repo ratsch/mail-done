@@ -43,7 +43,8 @@ class AccountConfig(BaseModel):
     
     allow_moves_to: List[str] = Field(default_factory=list)
     folders: Dict[str, str] = Field(default_factory=dict)
-    
+    route_inbox_to: Optional[str] = None  # Route INBOX emails to this account after processing
+
     def can_move_to(self, target: str) -> bool:
         """Check if moves to target account are allowed"""
         return target in self.allow_moves_to
@@ -120,7 +121,8 @@ class AccountManager:
                         oauth2_tenant_id=oauth2_config.get('tenant_id'),
                         oauth2_client_id=oauth2_config.get('client_id'),
                         allow_moves_to=acc_config.get('allow_moves_to', []),
-                        folders=acc_config.get('folders', {})
+                        folders=acc_config.get('folders', {}),
+                        route_inbox_to=acc_config.get('route_inbox_to')
                     )
                     self.accounts[nickname] = account
                     auth_info = f"[{auth_type}]" if auth_type == "oauth2" else ""

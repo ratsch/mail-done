@@ -930,7 +930,39 @@ class EmailProcessingPipeline:
                             result['dry_run_actions'].append(f"Would add labels: {', '.join(ai_action.labels)} (AI: {ai_classification.category})")
                         elif ai_action.type == 'archive':
                             result['dry_run_actions'].append(f"Would archive (AI: {ai_classification.category})")
-        
+
+        # Route INBOX emails to another account if configured (e.g., eth → work)
+        # Only applies if:
+        # 1. Account has route_inbox_to configured
+        # 2. Email is still in INBOX (no move was executed)
+        # 3. Cross-account moves are allowed
+        if (self._current_folder == 'INBOX' and
+            self.allow_cross_account_moves and
+            self.account_manager and
+            not result.get('cross_account_move')):
+
+            account_config = self.account_manager.get_account(self.account_id)
+            route_to = account_config.route_inbox_to if account_config else None
+
+            if route_to and route_to != self.account_id:
+                # Check if any move was already executed
+                move_executed = any('Moved' in action or 'move' in action.lower()
+                                   for action in result.get('executed', []))
+
+                if not move_executed:
+                    # Route to target account's INBOX
+                    route_action = EmailAction(type='move', folder='INBOX', target_account=route_to)
+
+                    if self.dry_run:
+                        result['dry_run_actions'].append(f"Would route to {route_to}:INBOX (route_inbox_to)")
+                    else:
+                        executed, cross_account_info = await self._execute_action_with_info(
+                            email.uid, route_action, imap
+                        )
+                        if executed and cross_account_info:
+                            result['executed'].append(f"✅ Routed to {route_to}:INBOX")
+                            result['cross_account_move'] = cross_account_info
+
         return result
     
     def _sync_generate_embedding(self, db_session: Session, db_email: "Email", result: Dict):
@@ -3576,13 +3608,7 @@ async def main():
         
         # Warn about cross-account moves
         if args.allow_cross_account_moves:
-            print(f"\n⚠️  WARNING: Cross-account moves are ENABLED!")
-            print(f"   Emails may be moved to: {', '.join(account_config.allow_moves_to) if account_config.allow_moves_to else '(none)'}")
-            if not args.dry_run:
-                response = input("   Continue? (yes/no): ")
-                if response.lower() != 'yes':
-                    print("Cancelled.")
-                    sys.exit(0)
+            print(f"\n⚠️  Cross-account moves ENABLED → {', '.join(account_config.allow_moves_to) if account_config.allow_moves_to else '(none)'}")
         
     except ImportError:
         # Fallback to legacy mode if AccountManager not available

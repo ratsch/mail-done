@@ -157,7 +157,7 @@ class CrossAccountMoveService:
         
         return success, error, None
     
-    async def _try_imap_copy(self, 
+    async def _try_imap_copy(self,
                             uid: str,
                             from_account: str,
                             from_folder: str,
@@ -167,9 +167,12 @@ class CrossAccountMoveService:
                             expected_message_id: str) -> Tuple[bool, Optional[str], str]:
         """
         Try to use IMAP APPEND (works if both accounts on same server).
-        
+
         Note: Standard IMAP COPY doesn't work across accounts, so we use APPEND.
         """
+        # Strip header folding whitespace (e.g., \r\n\t) from Message-ID early
+        expected_message_id = expected_message_id.strip() if expected_message_id else ''
+
         from_config = self.account_manager.get_account(from_account)
         to_config = self.account_manager.get_account(to_account)
         
@@ -217,13 +220,13 @@ class CrossAccountMoveService:
             email_data = msg_data[uid_int]
             raw_email = email_data[b'RFC822']
             flags = email_data.get(b'FLAGS', [])
-            
+
             # Parse to verify Message-ID
             msg = message_from_bytes(raw_email)
-            message_id = msg.get('Message-ID', '')
+            message_id = msg.get('Message-ID', '').strip()
             if message_id != expected_message_id:
                 logger.warning(f"Message-ID mismatch: expected {expected_message_id}, got {message_id}")
-            
+
             # Check if already exists in target
             to_imap.client.select_folder(to_folder)
             existing = to_imap.client.search(['HEADER', 'Message-ID', message_id])
@@ -270,6 +273,9 @@ class CrossAccountMoveService:
         """
         Download from source and upload to target (works across any servers).
         """
+        # Strip header folding whitespace (e.g., \r\n\t) from Message-ID early
+        expected_message_id = expected_message_id.strip() if expected_message_id else ''
+
         to_imap = None
         try:
             # Download from source
@@ -303,10 +309,10 @@ class CrossAccountMoveService:
             raw_email = email_data[b'RFC822']
             flags = email_data.get(b'FLAGS', [])
             internal_date = email_data.get(b'INTERNALDATE')
-            
+
             # Parse to verify Message-ID
             msg = message_from_bytes(raw_email)
-            message_id = msg.get('Message-ID', '')
+            message_id = msg.get('Message-ID', '').strip()
             if message_id != expected_message_id:
                 logger.warning(f"Message-ID mismatch: expected {expected_message_id}, got {message_id}")
             

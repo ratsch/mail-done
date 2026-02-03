@@ -93,15 +93,40 @@ class AttachmentExtractor:
         """
         self.account_manager = account_manager
     
+    def _get_oauth2_token(self, config: IMAPConfig) -> str:
+        """Get OAuth2 access token for IMAP authentication."""
+        from backend.core.auth.oauth2_provider import OAuth2Provider, OAuth2Config
+
+        if not config.oauth2_client_id or not config.oauth2_tenant_id:
+            raise ValueError(
+                "OAuth2 authentication requires oauth2_client_id and oauth2_tenant_id"
+            )
+
+        if not config.oauth2_refresh_token and not config.oauth2_client_secret:
+            raise ValueError(
+                "OAuth2 authentication requires either oauth2_refresh_token (delegated) "
+                "or oauth2_client_secret (app-only)"
+            )
+
+        oauth_config = OAuth2Config(
+            tenant_id=config.oauth2_tenant_id,
+            client_id=config.oauth2_client_id,
+            client_secret=config.oauth2_client_secret,
+            refresh_token=config.oauth2_refresh_token
+        )
+
+        provider = OAuth2Provider(oauth_config)
+        return provider.get_access_token(config.username)
+
     @contextmanager
     def _get_imap_connection(self, config: IMAPConfig, timeout: int = 120):
         """
         Create IMAP connection context manager.
-        
+
         Args:
             config: IMAP configuration
             timeout: Connection timeout in seconds
-            
+
         Yields:
             IMAPClient connection
         """
@@ -113,8 +138,14 @@ class AttachmentExtractor:
                 ssl=config.use_ssl,
                 timeout=timeout
             )
-            client.login(config.username, config.password)
-            logger.debug(f"Connected to IMAP: {config.host}")
+            # Login based on auth type
+            if config.auth_type == "oauth2":
+                access_token = self._get_oauth2_token(config)
+                client.oauth2_login(config.username, access_token)
+                logger.debug(f"Connected to IMAP via OAuth2: {config.host}")
+            else:
+                client.login(config.username, config.password)
+                logger.debug(f"Connected to IMAP: {config.host}")
             yield client
         finally:
             if client:
