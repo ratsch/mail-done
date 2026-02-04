@@ -407,6 +407,9 @@ class SharedApplicationResponse(BaseModel):
     Security: NEVER includes email body, from_address, or private notes.
     Reviews and decisions are conditional based on token permissions.
     """
+    # Application identifier (for future extensibility)
+    email_id: UUID = Field(..., description="Application ID for potential future linking")
+
     # Basic info (always included)
     applicant_name: Optional[str]
     applicant_institution: Optional[str]
@@ -469,6 +472,7 @@ class SharedApplicationResponse(BaseModel):
     # Share metadata
     shared_at: datetime = Field(..., description="When this shared view was accessed")
     share_expires_at: datetime = Field(..., description="When this share link expires")
+    shared_by: str = Field(..., description="Name of the person who shared this link")
 
     class Config:
         from_attributes = True

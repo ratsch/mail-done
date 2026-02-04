@@ -376,6 +376,10 @@ def _build_shared_response(
     share_token: ApplicationShareToken
 ) -> SharedApplicationResponse:
     """Build filtered application response for shared view."""
+    # Look up the creator's name for shared_by field
+    creator = db.query(LabMember).filter(LabMember.id == share_token.created_by).first()
+    shared_by = creator.full_name or creator.email if creator else "Unknown"
+
     # Extract category_metadata (non-PII)
     category_metadata = metadata.category_metadata or {}
     red_flags_dict = category_metadata.get('red_flags', {})
@@ -438,6 +442,9 @@ def _build_shared_response(
         application_status = metadata.application_status or "pending"
 
     return SharedApplicationResponse(
+        # Application identifier
+        email_id=email.id,
+
         # Basic info (always included)
         applicant_name=metadata.applicant_name,
         applicant_institution=metadata.applicant_institution,
@@ -497,5 +504,6 @@ def _build_shared_response(
 
         # Share metadata
         shared_at=datetime.utcnow(),
-        share_expires_at=share_token.expires_at
+        share_expires_at=share_token.expires_at,
+        shared_by=shared_by
     )
