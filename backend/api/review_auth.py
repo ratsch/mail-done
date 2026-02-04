@@ -29,6 +29,9 @@ JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
 JWT_ISSUER = os.getenv("JWT_ISSUER", "mail-done-review-system")  # Token issuer identifier
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "mail-done-review-api")  # Token audience identifier
 
+# Share token configuration - separate audience to prevent token reuse
+SHARE_TOKEN_AUDIENCE = "v0-portal-share"
+
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID_V0_PORTAL")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET_V0_PORTAL")
@@ -285,30 +288,45 @@ async def get_current_user_hybrid(
     db: Session = Depends(get_db)
 ) -> LabMember:
     """
-    Get current authenticated user from EITHER signed request auth OR JWT Bearer token.
-    
+    Get current authenticated user from signed request, API key, or JWT Bearer token.
+
     This hybrid dependency supports:
     1. Signed request authentication (X-Signature, X-Client-Id headers) - used by V0 portal
-    2. JWT Bearer token authentication - used by legacy clients
-    
-    Tries signed auth first, falls back to Bearer token.
-    Returns LabMember in both cases.
+    2. X-API-Key header - used by MCP server (maps to API_KEY_USER_EMAIL)
+    3. JWT Bearer token authentication - used by legacy clients
+
+    Tries each method in order until one succeeds.
+    Returns LabMember in all cases.
     """
+    import secrets
     from backend.api.signed_auth import get_auth_context, HEADER_SIGNATURE
-    
+
     user_email: Optional[str] = None
-    
+    logger = logging.getLogger(__name__)
+
     # Try signed auth first (check for X-Signature header)
     if request.headers.get(HEADER_SIGNATURE):
         try:
             auth_context = await get_auth_context(request, api_key=None)
             user_email = auth_context.user_email
-            logging.getLogger(__name__).debug(f"Signed auth succeeded for {user_email}")
+            logger.debug(f"Signed auth succeeded for {user_email}")
         except HTTPException as e:
-            # Signed auth failed, will try Bearer token below
-            logging.getLogger(__name__).debug(f"Signed auth failed: {e.detail}")
-    
-    # Fall back to JWT Bearer token if signed auth didn't work
+            # Signed auth failed, will try other methods below
+            logger.debug(f"Signed auth failed: {e.detail}")
+
+    # Try X-API-Key authentication
+    if not user_email:
+        api_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("API_KEY")
+        if api_key and expected_key and secrets.compare_digest(api_key, expected_key):
+            # API key valid - map to configured user email
+            user_email = os.getenv("API_KEY_USER_EMAIL")
+            if user_email:
+                logger.debug(f"API key auth succeeded for {user_email}")
+            else:
+                logger.warning("API key valid but API_KEY_USER_EMAIL not configured")
+
+    # Fall back to JWT Bearer token if other methods didn't work
     if not user_email and credentials:
         try:
             payload = decode_jwt_token(credentials.credentials)
@@ -503,4 +521,134 @@ def handle_failed_auth(email: str, db: Session, reason: str = "unknown"):
 def handle_failed_login(email: str, db: Session):
     """Deprecated: Use handle_failed_auth() instead."""
     handle_failed_auth(email, db, reason="legacy_call")
+
+
+# ============================================================================
+# Application Share Token Functions
+# ============================================================================
+
+def create_share_token_jwt(
+    share_id: str,
+    email_id: str,
+    permissions: dict,
+    expires_at: datetime
+) -> str:
+    """
+    Create a JWT for an application share token.
+
+    This token allows unauthenticated access to a specific application's
+    filtered data. Uses a separate audience to prevent token reuse attacks.
+
+    Args:
+        share_id: UUID of the ApplicationShareToken record
+        email_id: UUID of the application email
+        permissions: Dict with can_view_reviews, can_view_decision flags
+        expires_at: When the token expires
+
+    Returns:
+        JWT string that can be used as the share token
+    """
+    now = datetime.utcnow()
+    payload = {
+        "type": "application_share",  # Token type identifier
+        "share_id": str(share_id),
+        "email_id": str(email_id),
+        "permissions": permissions,
+        "iat": now,
+        "exp": expires_at,
+        "iss": JWT_ISSUER,
+        "aud": SHARE_TOKEN_AUDIENCE,  # Separate audience prevents reuse
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def decode_share_token_jwt(token: str) -> dict:
+    """
+    Decode and validate an application share token JWT.
+
+    Validates:
+    - Signature (using JWT_SECRET)
+    - Expiration (exp claim)
+    - Issuer (iss claim)
+    - Audience (must be SHARE_TOKEN_AUDIENCE)
+    - Token type (must be "application_share")
+
+    Args:
+        token: The JWT string to decode
+
+    Returns:
+        Decoded payload dict with share_id, email_id, permissions
+
+    Raises:
+        HTTPException: If token is invalid, expired, or fails validation
+    """
+    logger = logging.getLogger(__name__)
+
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+            audience=SHARE_TOKEN_AUDIENCE,
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            }
+        )
+
+        # Verify token type
+        if payload.get("type") != "application_share":
+            logger.warning(f"Share token has wrong type: {payload.get('type')}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid share token type"
+            )
+
+        # Verify required fields
+        if not payload.get("share_id") or not payload.get("email_id"):
+            logger.warning("Share token missing required fields")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid share token: missing required fields"
+            )
+
+        return payload
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Share link has expired"
+        )
+    except jwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid share token issuer"
+        )
+    except jwt.InvalidAudienceError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid share token audience"
+        )
+    except jwt.InvalidSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid share token signature"
+        )
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid share token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid share token"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error decoding share token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid share token"
+        )
 

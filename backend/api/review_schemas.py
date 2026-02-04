@@ -335,3 +335,141 @@ class AvailableTagsResponse(BaseModel):
     """Response for available tags endpoint"""
     tags: List[str] = Field(..., description="List of unique tag names")
 
+
+# ============================================================================
+# Application Share Token Schemas
+# ============================================================================
+
+class ShareTokenPermissions(BaseModel):
+    """Permissions for a share token"""
+    can_view_reviews: bool = Field(False, description="Allow viewing reviews from lab members")
+    can_view_decision: bool = Field(False, description="Allow viewing the final decision")
+
+
+class CreateShareTokenRequest(BaseModel):
+    """Request to create a share token for an application"""
+    expires_in_hours: int = Field(
+        168,  # Default 1 week
+        ge=1,
+        le=720,  # Max 30 days
+        description="Hours until the share link expires (1-720)"
+    )
+    max_uses: Optional[int] = Field(
+        None,
+        ge=1,
+        le=1000,
+        description="Maximum number of times the link can be used (null = unlimited)"
+    )
+    can_view_reviews: bool = Field(False, description="Allow viewing reviews from lab members")
+    can_view_decision: bool = Field(False, description="Allow viewing the final decision")
+
+
+class ShareTokenResponse(BaseModel):
+    """Response when creating a share token"""
+    id: UUID
+    share_url: str = Field(..., description="Full URL for sharing")
+    token: str = Field(..., description="Raw JWT token (only returned on creation)")
+    email_id: UUID
+    permissions: ShareTokenPermissions
+    expires_at: datetime
+    max_uses: Optional[int]
+    uses_count: int
+    created_at: datetime
+    created_by_name: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class ShareTokenListItem(BaseModel):
+    """Share token in list response (without raw token)"""
+    id: UUID
+    email_id: UUID
+    permissions: ShareTokenPermissions
+    expires_at: datetime
+    max_uses: Optional[int]
+    uses_count: int
+    is_revoked: bool
+    is_expired: bool = Field(..., description="Computed: whether token has expired")
+    is_exhausted: bool = Field(..., description="Computed: whether max_uses reached")
+    last_used_at: Optional[datetime]
+    created_at: datetime
+    created_by_name: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class SharedApplicationResponse(BaseModel):
+    """
+    Filtered application data for shared view.
+
+    Security: NEVER includes email body, from_address, or private notes.
+    Reviews and decisions are conditional based on token permissions.
+    """
+    # Basic info (always included)
+    applicant_name: Optional[str]
+    applicant_institution: Optional[str]
+    nationality: Optional[str]
+    highest_degree: Optional[str]
+    current_situation: Optional[str]
+    date: datetime
+
+    # Classification and category
+    category: Optional[str]
+    subcategory: Optional[str]
+
+    # Online profiles (always included)
+    github_account: Optional[str]
+    linkedin_account: Optional[str]
+    google_scholar_account: Optional[str]
+
+    # Scores (always included)
+    scientific_excellence_score: Optional[int]
+    scientific_excellence_reason: Optional[str]
+    research_fit_score: Optional[int]
+    research_fit_reason: Optional[str]
+    overall_recommendation_score: Optional[int]
+    recommendation_reason: Optional[str]
+
+    # Technical experience (always included)
+    coding_experience_score: Optional[int]
+    coding_experience_evidence: Optional[str]
+    omics_genomics_experience_score: Optional[int]
+    omics_genomics_experience_evidence: Optional[str]
+    medical_data_experience_score: Optional[int]
+    medical_data_experience_evidence: Optional[str]
+    sequence_analysis_experience_score: Optional[int]
+    sequence_analysis_experience_evidence: Optional[str]
+    image_analysis_experience_score: Optional[int]
+    image_analysis_experience_evidence: Optional[str]
+
+    # AI evaluation (always included)
+    summary: Optional[str]
+    key_strengths: Optional[List[str]]
+    concerns: Optional[List[str]]
+    next_steps: Optional[str]
+    profile_tags: Optional[List[Dict[str, Any]]]
+    red_flags: Optional[Dict[str, Any]]
+
+    # Attachments (always included - links only)
+    attachments_list: Optional[List[Dict[str, str]]]
+    consolidated_attachments: Optional[List[Dict[str, Any]]]
+    reference_letter_attachments: Optional[List[Dict[str, Any]]]
+
+    # Reviews (conditional - only if can_view_reviews)
+    reviews: Optional[List[ReviewResponse]] = None
+    avg_rating: Optional[float] = None
+    num_ratings: Optional[int] = None
+
+    # Decision (conditional - only if can_view_decision)
+    decision: Optional[DecisionResponse] = None
+    application_status: Optional[str] = None
+
+    # Share metadata
+    shared_at: datetime = Field(..., description="When this shared view was accessed")
+    share_expires_at: datetime = Field(..., description="When this share link expires")
+
+    class Config:
+        from_attributes = True
+

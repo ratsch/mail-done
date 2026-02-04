@@ -934,20 +934,74 @@ class ApplicationCollectionItem(Base):
     An application can be in multiple collections.
     """
     __tablename__ = "application_collection_items"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     collection_id = Column(UUID(as_uuid=True), ForeignKey('application_collections.id', ondelete='CASCADE'), nullable=False)
     email_id = Column(UUID(as_uuid=True), ForeignKey('emails.id', ondelete='CASCADE'), nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
+
     # Relationships
     collection = relationship("ApplicationCollection", back_populates="items")
     email = relationship("Email", foreign_keys=[email_id])
-    
+
     __table_args__ = (
         Index('ix_collection_items_collection_id', 'collection_id'),
         Index('ix_collection_items_email_id', 'email_id'),
         Index('uq_collection_item', 'collection_id', 'email_id', unique=True),
+    )
+
+
+class ApplicationShareToken(Base):
+    """
+    Secure, time-limited share tokens for sharing application details
+    with external parties (collaborators, committee members) without
+    requiring portal authentication.
+
+    Security:
+    - Token hash (SHA256) stored in DB, not plain token
+    - JWT signed with JWT_SECRET (HS256) with separate audience
+    - Revocation support via is_revoked flag
+    - Usage tracking (uses_count, last_used_at)
+    - All access logged to SecurityLog
+    """
+    __tablename__ = "application_share_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_id = Column(UUID(as_uuid=True), ForeignKey('emails.id', ondelete='CASCADE'), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey('lab_members.id', ondelete='SET NULL'), nullable=True)
+
+    # Token security - store hash, not plain token
+    token_hash = Column(String(64), nullable=False, unique=True)  # SHA256 hash of the JWT
+
+    # Permissions - what can be viewed via this share link
+    permissions = Column(JSON, nullable=False, default=dict)  # {"can_view_reviews": bool, "can_view_decision": bool}
+
+    # Expiration and usage limits
+    expires_at = Column(DateTime, nullable=False)
+    max_uses = Column(Integer, nullable=True)  # NULL = unlimited
+    uses_count = Column(Integer, nullable=False, default=0)
+
+    # Revocation
+    is_revoked = Column(Boolean, nullable=False, default=False)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(UUID(as_uuid=True), ForeignKey('lab_members.id', ondelete='SET NULL'), nullable=True)
+
+    # Audit fields
+    last_used_at = Column(DateTime, nullable=True)
+    last_used_ip = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    email = relationship("Email", foreign_keys=[email_id])
+    creator = relationship("LabMember", foreign_keys=[created_by])
+    revoker = relationship("LabMember", foreign_keys=[revoked_by])
+
+    __table_args__ = (
+        Index('ix_share_tokens_email_id', 'email_id'),
+        Index('ix_share_tokens_created_by', 'created_by'),
+        Index('ix_share_tokens_token_hash', 'token_hash', unique=True),
+        Index('ix_share_tokens_expires_at', 'expires_at'),
+        Index('ix_share_tokens_active', 'email_id', 'is_revoked', 'expires_at'),  # For listing active tokens
     )
 
 
