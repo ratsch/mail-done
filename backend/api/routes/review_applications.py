@@ -92,6 +92,7 @@ def build_application_query(
     min_excellence_score: Optional[int] = None,
     min_research_fit_score: Optional[int] = None,
     search_name: Optional[str] = None,
+    search_text: Optional[str] = None,  # Full-text search across AI analysis fields
     received_after: Optional[str] = None,
     received_before: Optional[str] = None,
     application_status: Optional[str] = None,
@@ -306,6 +307,7 @@ async def list_applications(
     min_excellence_score: Optional[int] = Query(None, ge=0, le=10),
     min_research_fit_score: Optional[int] = Query(None, ge=0, le=10),
     search_name: Optional[str] = Query(None, description="Search by applicant name or institution (case-insensitive)"),
+    search_text: Optional[str] = Query(None, description="Full-text search across AI analysis fields (key_strengths, concerns, ai_reasoning, current_situation, additional_notes, red_flags)"),
     received_after: Optional[str] = Query(None, description="Received after date (YYYY-MM-DD)"),
     received_before: Optional[str] = Query(None, description="Received before date (YYYY-MM-DD)"),
     status: Optional[str] = Query(None, description="Application status"),
@@ -378,6 +380,7 @@ async def list_applications(
             min_excellence_score=min_excellence_score,
             min_research_fit_score=min_research_fit_score,
             search_name=search_name,
+            search_text=search_text,
             received_after=received_after,
             received_before=received_before,
             application_status=status,
@@ -474,33 +477,91 @@ async def list_applications(
         else:
             query = query.order_by(desc(order_col))
         
-        # Apply pagination (but we may need to filter by highest_degree in Python after decryption)
-        # If highest_degree filter is active, we need to fetch more results to account for filtering
-        # For now, fetch results and filter in Python
+        # Apply pagination (but we may need to filter by highest_degree or search_text in Python after decryption)
+        # If highest_degree or search_text filter is active, we need to fetch more results to account for filtering
         offset = (page - 1) * limit
-        
-        # If highest_degree filter is active, we need to fetch all results, filter, then paginate
-        # Otherwise, use normal pagination
-        if highest_degree_list and len(highest_degree_list) > 0:
-            # Fetch all results (without limit) to filter by highest_degree
+
+        # Helper function for full-text search across encrypted fields
+        def matches_search_text(metadata, search_query: str) -> bool:
+            """Check if any of the searchable fields contain the search query (case-insensitive)."""
+            search_lower = search_query.lower()
+
+            # Search in ai_reasoning (EncryptedText)
+            ai_reasoning = metadata.ai_reasoning or ""
+            if search_lower in ai_reasoning.lower():
+                return True
+
+            # Search in category_specific_data (EncryptedJSON) fields
+            category_specific = metadata.category_specific_data or {}
+
+            # Search in key_strengths (array of strings)
+            key_strengths = category_specific.get('key_strengths', [])
+            if isinstance(key_strengths, list):
+                for strength in key_strengths:
+                    if isinstance(strength, str) and search_lower in strength.lower():
+                        return True
+
+            # Search in concerns (array of strings)
+            concerns = category_specific.get('concerns', [])
+            if isinstance(concerns, list):
+                for concern in concerns:
+                    if isinstance(concern, str) and search_lower in concern.lower():
+                        return True
+
+            # Search in current_situation (string)
+            current_situation = category_specific.get('current_situation', "")
+            if isinstance(current_situation, str) and search_lower in current_situation.lower():
+                return True
+
+            # Search in additional_notes (string)
+            additional_notes = category_specific.get('additional_notes', "")
+            if isinstance(additional_notes, str) and search_lower in additional_notes.lower():
+                return True
+
+            # Search in red_flags keys (from category_metadata, which is unencrypted)
+            category_metadata = metadata.category_metadata or {}
+            red_flags = category_metadata.get('red_flags', {})
+            if isinstance(red_flags, dict):
+                for flag_key, flag_value in red_flags.items():
+                    # Only search keys where value is True
+                    if flag_value is True and search_lower in flag_key.lower():
+                        return True
+
+            return False
+
+        # If highest_degree or search_text filter is active, we need to fetch all results, filter, then paginate
+        needs_python_filtering = (highest_degree_list and len(highest_degree_list) > 0) or search_text
+
+        if needs_python_filtering:
+            # Fetch all results (without limit) to filter in Python
             all_results = query.all()
-            
-            # Filter by highest_degree in Python (after decryption)
+
+            # Filter in Python (after decryption)
             filtered_results = []
             for row in all_results:
                 metadata = row[1]
-                category_specific = metadata.category_specific_data or {}
-                degree_value = category_specific.get('highest_degree_completed')
-                
-                # Check if degree matches any of the selected degrees (OR logic)
-                if degree_value in highest_degree_list:
-                    filtered_results.append(row)
-            
+
+                # Apply highest_degree filter if active
+                if highest_degree_list and len(highest_degree_list) > 0:
+                    category_specific = metadata.category_specific_data or {}
+                    degree_value = category_specific.get('highest_degree_completed')
+
+                    # Check if degree matches any of the selected degrees (OR logic)
+                    if degree_value not in highest_degree_list:
+                        continue  # Skip this result
+
+                # Apply search_text filter if active
+                if search_text:
+                    if not matches_search_text(metadata, search_text):
+                        continue  # Skip this result
+
+                filtered_results.append(row)
+
             # Now paginate the filtered results
             total = len(filtered_results)
             results = filtered_results[offset:offset + limit]
         else:
-            # Normal pagination when no highest_degree filter
+            # Normal pagination when no Python-level filtering needed
             results = query.offset(offset).limit(limit).all()
         
         # Build response items from joined results
