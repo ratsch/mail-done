@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# SQLite test artifacts
+:memory:*
+
 # Python
 __pycache__/
 *.pyc

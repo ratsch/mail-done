@@ -97,6 +97,8 @@ def build_application_query(
     received_before: Optional[str] = None,
     application_status: Optional[str] = None,
     has_decision: Optional[bool] = None,
+    exclude_rejected: Optional[bool] = None,  # If True, exclude applications with decision='reject' or 'delete'
+    decision_type: Optional[str] = None,  # Filter to specific decision type: 'accept', 'reject', 'interview', 'request_more_info'
     is_mass_email: Optional[bool] = None,
     no_research_background: Optional[bool] = None,
     insufficient_materials: Optional[bool] = None,
@@ -109,7 +111,8 @@ def build_application_query(
     highest_degree: Optional[List[str]] = None,  # List of degree values (OR logic - any match)
     is_not_application_filter: Optional[bool] = None,  # None=show all, True=only show is_not_application=true, False=only show is_not_application=false
     application_source: Optional[str] = None,  # Filter by application source (e.g., 'ai_center')
-    collection_id: Optional[UUID] = None  # Filter by collection
+    collection_id: Optional[UUID] = None,  # Filter by collection
+    assigned_to_me: Optional[UUID] = None  # Filter by pending assignments for this user
 ) -> Query:
     """Build optimized query for applications with filters."""
     try:
@@ -226,7 +229,19 @@ def build_application_query(
                 query = query.filter(Email.id.in_(decision_select))
             else:
                 query = query.filter(Email.id.notin_(decision_select))
-        
+
+        # Exclude rejected and deleted applications
+        if exclude_rejected:
+            rejected_select = select(ApplicationDecision.email_id).where(
+                ApplicationDecision.decision.in_(['reject', 'delete'])
+            )
+            query = query.filter(Email.id.notin_(rejected_select))
+
+        # Filter by specific decision type
+        if decision_type:
+            decision_type_select = select(ApplicationDecision.email_id).where(ApplicationDecision.decision == decision_type)
+            query = query.filter(Email.id.in_(decision_type_select))
+
         # Red flags
         if is_mass_email is not None:
             # Use parameterized query to avoid SQL injection
@@ -253,7 +268,17 @@ def build_application_query(
                 ApplicationReview.lab_member_id == needs_review_by_me
             )
             query = query.filter(Email.id.notin_(reviewed_select))
-        
+
+        # Assigned to me (pending assignments)
+        if assigned_to_me:
+            from backend.core.database.models import ApplicationReviewAssignment
+            assignment_exists = db.query(ApplicationReviewAssignment.id).filter(
+                ApplicationReviewAssignment.email_id == Email.id,
+                ApplicationReviewAssignment.assigned_to == assigned_to_me,
+                ApplicationReviewAssignment.status == "pending",
+            ).exists()
+            query = query.filter(assignment_exists)
+
         # Deadline approaching (next 3 days)
         if deadline_approaching:
             now = datetime.utcnow()
@@ -312,6 +337,8 @@ async def list_applications(
     received_before: Optional[str] = Query(None, description="Received before date (YYYY-MM-DD)"),
     status: Optional[str] = Query(None, description="Application status"),
     has_decision: Optional[bool] = Query(None),
+    exclude_rejected: Optional[bool] = Query(None, description="Exclude applications with decision='reject' or 'delete'"),
+    decision_type: Optional[str] = Query(None, description="Filter to specific decision type: 'accept', 'reject', 'interview', 'request_more_info'"),
     is_mass_email: Optional[bool] = Query(None),
     no_research_background: Optional[bool] = Query(None),
     insufficient_materials: Optional[bool] = Query(None),
@@ -325,6 +352,7 @@ async def list_applications(
     is_not_application_filter: Optional[bool] = Query(None, description="Filter by is_not_application: false=only actual applications (default), true=only non-applications, null=show all (admin only)"),
     application_source: Optional[str] = Query(None, description="Filter by application source (e.g., 'ai_center' for AI Center applications)"),
     collection_id: Optional[UUID] = Query(None, description="Filter by collection ID"),
+    assigned_to_me: Optional[bool] = Query(None, description="Show only applications with pending assignments for me"),
     sort_by: str = Query("date", description="Sort field"),
     sort_order: str = Query("desc", description="Sort order"),
     page: int = Query(1, ge=1),
@@ -385,6 +413,8 @@ async def list_applications(
             received_before=received_before,
             application_status=status,
             has_decision=has_decision,
+            exclude_rejected=exclude_rejected,
+            decision_type=decision_type,
             is_mass_email=is_mass_email,
             no_research_background=no_research_background,
             insufficient_materials=insufficient_materials,
@@ -397,7 +427,8 @@ async def list_applications(
             highest_degree=highest_degree_list,
             is_not_application_filter=effective_is_not_application_filter,
             application_source=application_source,
-            collection_id=collection_id
+            collection_id=collection_id,
+            assigned_to_me=current_user.id if assigned_to_me else None
         )
         
         # Optimize: Use subqueries to avoid N+1 queries
@@ -1212,6 +1243,12 @@ async def submit_review(
         existing_review.comment = review.comment
         existing_review.updated_at = datetime.utcnow()
         action_type = "review_update"
+        # Auto-complete pending assignments for this reviewer
+        try:
+            from backend.api.routes.review_assignments import complete_assignments_on_review
+            complete_assignments_on_review(db, email_id, current_user.id)
+        except Exception as e:
+            logger.error(f"Failed to auto-complete assignments: {e}")
         db.commit()
         db.refresh(existing_review)
     else:
@@ -1221,7 +1258,7 @@ async def submit_review(
             ApplicationReview.email_id == email_id,
             ApplicationReview.lab_member_id == current_user.id
         ).first()
-        
+
         if existing_review:
             # Another request created it, update instead
             existing_review.rating = review.rating
@@ -1237,7 +1274,13 @@ async def submit_review(
                 comment=review.comment
             )
             db.add(existing_review)
-        
+
+        # Auto-complete pending assignments for this reviewer
+        try:
+            from backend.api.routes.review_assignments import complete_assignments_on_review
+            complete_assignments_on_review(db, email_id, current_user.id)
+        except Exception as e:
+            logger.error(f"Failed to auto-complete assignments: {e}")
         db.commit()
         db.refresh(existing_review)
     

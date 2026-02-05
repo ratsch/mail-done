@@ -40,8 +40,14 @@ def test_db():
     else:
         engine = create_engine(TEST_DATABASE_URL)
     
-    # Create all tables
-    Base.metadata.create_all(bind=engine)
+    # Create tables selectively - exclude document tables that use PostgreSQL ARRAY type
+    # which is not supported by SQLite
+    _pg_only_tables = {"documents", "document_origins", "document_pages", "document_processing_queue"}
+    tables_to_create = [
+        t for t in Base.metadata.sorted_tables
+        if t.name not in _pg_only_tables
+    ]
+    Base.metadata.create_all(bind=engine, tables=tables_to_create)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db = TestingSessionLocal()
     try:

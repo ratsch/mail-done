@@ -247,7 +247,28 @@ async def get_overview_stats(
         ).group_by(EmailMetadata.ai_category).all()
         
         applications_by_category = {cat: count for cat, count in category_counts}
-        
+
+        # Assignment stats for current user
+        my_pending_assignments = 0
+        my_overdue_assignments = 0
+        try:
+            from backend.core.database.models import ApplicationReviewAssignment, AssignmentBatch
+            my_pending_assignments = db.query(func.count(ApplicationReviewAssignment.id)).filter(
+                ApplicationReviewAssignment.assigned_to == current_user.id,
+                ApplicationReviewAssignment.status == "pending",
+            ).scalar() or 0
+
+            my_overdue_assignments = db.query(func.count(ApplicationReviewAssignment.id)).join(
+                AssignmentBatch, ApplicationReviewAssignment.batch_id == AssignmentBatch.id,
+            ).filter(
+                ApplicationReviewAssignment.assigned_to == current_user.id,
+                ApplicationReviewAssignment.status == "pending",
+                AssignmentBatch.deadline.isnot(None),
+                AssignmentBatch.deadline < datetime.utcnow(),
+            ).scalar() or 0
+        except Exception as e:
+            logger.warning(f"Failed to get assignment stats: {e}")
+
         return {
             "total_applications": total_applications,
             "relevant_applications": relevant_applications,
@@ -263,7 +284,9 @@ async def get_overview_stats(
             "old_applications": old_applications,
             "avg_rating_all": avg_rating_all,
             "applications_by_status": applications_by_status,
-            "applications_by_category": applications_by_category
+            "applications_by_category": applications_by_category,
+            "my_pending_assignments": my_pending_assignments,
+            "my_overdue_assignments": my_overdue_assignments
         }
     except Exception as e:
         logger.error(f"Error getting overview stats: {e}", exc_info=True)

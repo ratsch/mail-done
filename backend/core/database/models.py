@@ -14,11 +14,11 @@ Encryption:
 - Unencrypted fields: subjects, email addresses, names, scores (for search/filtering)
 - See backend/core/database/encryption.py for implementation
 """
-from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, JSON, ForeignKey, Index, Date
+from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, JSON, ForeignKey, Index, Date, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 # Import encryption types
@@ -1005,3 +1005,86 @@ class ApplicationShareToken(Base):
     )
 
 
+# ============================================================================
+# Review Assignment Models
+# ============================================================================
+
+class AssignmentBatch(Base):
+    """
+    Batch of review assignments. Created when assigning applications to reviewers.
+    Stores shared metadata (notes, deadline) and supports co-management via shares.
+    """
+    __tablename__ = "assignment_batches"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("lab_members.id", ondelete="SET NULL"), nullable=True)
+    notes = Column(Text, nullable=True)
+    deadline = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    creator = relationship("LabMember", foreign_keys=[created_by])
+    shares = relationship("AssignmentBatchShare", back_populates="batch", cascade="all, delete-orphan")
+    assignments = relationship("ApplicationReviewAssignment", back_populates="batch", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('idx_batches_creator', 'created_by'),
+    )
+
+
+class AssignmentBatchShare(Base):
+    """
+    Grants co-management access to a batch. Shared users can edit/delete the batch
+    and manage its assignments.
+    """
+    __tablename__ = "assignment_batch_shares"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    batch_id = Column(UUID(as_uuid=True), ForeignKey("assignment_batches.id", ondelete="CASCADE"), nullable=False)
+    shared_with = Column(UUID(as_uuid=True), ForeignKey("lab_members.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('batch_id', 'shared_with', name='uq_batch_share'),
+        Index('idx_batch_shares_batch', 'batch_id'),
+        Index('idx_batch_shares_user', 'shared_with'),
+    )
+
+    batch = relationship("AssignmentBatch", back_populates="shares")
+    user = relationship("LabMember")
+
+
+class ApplicationReviewAssignment(Base):
+    """
+    Individual assignment: one reviewer assigned to one application.
+    Auto-completes when the reviewer submits a review.
+
+    Unique constraint (email_id, assigned_to) prevents duplicate assignments
+    even across different batches.
+    """
+    __tablename__ = "application_review_assignments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_id = Column(UUID(as_uuid=True), ForeignKey("emails.id", ondelete="CASCADE"), nullable=False)
+    assigned_to = Column(UUID(as_uuid=True), ForeignKey("lab_members.id", ondelete="RESTRICT"), nullable=False)
+    batch_id = Column(UUID(as_uuid=True), ForeignKey("assignment_batches.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), default="pending")  # 'pending', 'completed', 'declined'
+    declined_reason = Column(Text, nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    declined_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('email_id', 'assigned_to', name='uq_assignment_email_user'),
+        Index('idx_assignments_assignee', 'assigned_to'),
+        Index('idx_assignments_batch', 'batch_id'),
+        Index('idx_assignments_email', 'email_id'),
+        Index('idx_assignments_status', 'status'),
+        Index('idx_assignments_batch_status', 'batch_id', 'status'),
+    )
+
+    batch = relationship("AssignmentBatch", back_populates="assignments")
+    assignee = relationship("LabMember", foreign_keys=[assigned_to])
+    application = relationship("Email")

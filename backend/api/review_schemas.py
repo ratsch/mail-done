@@ -3,7 +3,7 @@ Pydantic schemas for Lab Application Review System
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 
 
@@ -505,4 +505,188 @@ class SharedApplicationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ============================================================================
+# Review Assignment Schemas
+# ============================================================================
+
+class CreateAssignmentRequest(BaseModel):
+    """Request to create a batch of assignments"""
+    email_ids: List[UUID] = Field(..., min_length=1, description="Application IDs to assign")
+    assigned_to: List[UUID] = Field(..., min_length=1, description="Reviewer IDs")
+    deadline: Optional[datetime] = Field(None, description="Optional deadline for reviews")
+    notes: Optional[str] = Field(None, max_length=5000, description="Instructions/context")
+    share_with: Optional[List[UUID]] = Field(None, description="Users to share batch management with")
+
+    @field_validator('email_ids', 'assigned_to')
+    @classmethod
+    def check_max_length(cls, v):
+        if len(v) > 100:
+            raise ValueError('Maximum 100 items per list')
+        return v
+
+
+class DuplicateAssignmentInfo(BaseModel):
+    """Info about a skipped duplicate assignment"""
+    email_id: UUID
+    assigned_to: UUID
+    applicant_name: Optional[str] = None
+    assignee_name: Optional[str] = None
+    existing_batch_id: UUID
+    existing_assigner: Optional[str] = None
+
+
+class CreateAssignmentResponse(BaseModel):
+    """Response from creating assignments"""
+    batch_id: UUID
+    created: int
+    skipped_duplicates: int
+    duplicates: List[DuplicateAssignmentInfo]
+
+
+class AddToBatchRequest(BaseModel):
+    """Request to add assignments to an existing batch"""
+    email_ids: List[UUID] = Field(..., min_length=1, description="Application IDs")
+    assigned_to: List[UUID] = Field(..., min_length=1, description="Reviewer IDs")
+
+
+class AssignmentResponse(BaseModel):
+    """Single assignment in a list response"""
+    id: UUID
+    email_id: UUID
+    batch_id: UUID
+    applicant_name: Optional[str] = None
+    category: Optional[str] = None
+    assigner_name: Optional[str] = None
+    assignee_name: Optional[str] = None
+    deadline: Optional[datetime] = None
+    notes: Optional[str] = None
+    status: str
+    declined_reason: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    declined_at: Optional[datetime] = None
+    created_at: datetime
+    is_overdue: bool = False
+    batch_total: Optional[int] = None
+    batch_completed: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PaginationInfo(BaseModel):
+    """Pagination metadata"""
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+
+
+class AssignmentListResponse(BaseModel):
+    """Response for listing assignments"""
+    assignments: List[AssignmentResponse]
+    pagination: PaginationInfo
+    summary: Dict[str, int]  # total_pending, total_overdue
+
+
+class BatchStatsInfo(BaseModel):
+    """Stats for a batch"""
+    total: int = 0
+    pending: int = 0
+    completed: int = 0
+    declined: int = 0
+
+
+class SharedWithInfo(BaseModel):
+    """User shared-with info"""
+    id: UUID
+    name: Optional[str] = None
+
+
+class BatchResponse(BaseModel):
+    """Batch in a list response"""
+    id: UUID
+    notes: Optional[str] = None
+    deadline: Optional[datetime] = None
+    created_by: Optional[UUID] = None
+    created_by_name: Optional[str] = None
+    is_owner: bool = False
+    can_edit: bool = False
+    shared_with: List[SharedWithInfo] = []
+    created_at: datetime
+    updated_at: datetime
+    stats: BatchStatsInfo
+
+    class Config:
+        from_attributes = True
+
+
+class BatchListResponse(BaseModel):
+    """Response for listing batches"""
+    batches: List[BatchResponse]
+    pagination: PaginationInfo
+
+
+class BatchDetailResponse(BatchResponse):
+    """Batch detail with assignments"""
+    assignments: List[AssignmentResponse] = []
+
+
+class UpdateBatchRequest(BaseModel):
+    """Request to update batch metadata"""
+    notes: Optional[str] = Field(None, max_length=5000)
+    deadline: Optional[datetime] = None
+    share_with: Optional[List[UUID]] = None  # Replaces all shares
+
+
+class DeclineAssignmentRequest(BaseModel):
+    """Request to decline an assignment"""
+    status: str = Field("declined", pattern="^declined$")
+    declined_reason: Optional[str] = Field(None, max_length=2000)
+
+
+class ApplicationAssignmentResponse(BaseModel):
+    """Assignment info shown on an application detail page"""
+    id: UUID
+    batch_id: UUID
+    assignee_name: Optional[str] = None
+    assigner_name: Optional[str] = None
+    deadline: Optional[datetime] = None
+    status: str
+    completed_at: Optional[datetime] = None
+    declined_at: Optional[datetime] = None
+
+
+class PreviewBulkAssignmentRequest(BaseModel):
+    """Request to preview a bulk assignment by date range"""
+    date_from: str = Field(..., description="Start date YYYY-MM-DD")
+    date_to: str = Field(..., description="End date YYYY-MM-DD")
+    assigned_to: List[UUID] = Field(..., min_length=1)
+    category: Optional[str] = Field(None, description="ai_category filter e.g. application-phd")
+
+
+class PreviewApplicationInfo(BaseModel):
+    """Application info in preview response"""
+    email_id: UUID
+    applicant_name: Optional[str] = None
+    category: Optional[str] = None
+    date: datetime
+
+
+class PreviewDuplicateInfo(BaseModel):
+    """Duplicate info in preview response"""
+    email_id: UUID
+    applicant_name: Optional[str] = None
+    existing_batch_id: UUID
+    existing_assigner: Optional[str] = None
+
+
+class PreviewBulkAssignmentResponse(BaseModel):
+    """Response from preview endpoint"""
+    total_applications: int
+    already_assigned: int
+    new_to_assign: int
+    applications: List[PreviewApplicationInfo]
+    duplicates: List[PreviewDuplicateInfo]
 

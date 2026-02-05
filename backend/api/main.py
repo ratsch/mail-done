@@ -14,7 +14,7 @@ import uuid
 from backend.api.auth import verify_api_key
 from backend.api.routes import emails, stats, tracking, replies, search, applemail, costs, debug, attachments, imap, documents
 from backend.api.routes import review_auth, review_applications, review_admin, review_notifications, review_stats, collections
-from backend.api.routes import oauth_handshake, application_shares
+from backend.api.routes import oauth_handshake, application_shares, review_assignments
 from backend.api.review_middleware import RateLimitMiddleware, AuditLogMiddleware, start_rate_limit_cleanup_thread
 from backend.api.rate_limiting import GeneralRateLimitMiddleware, cleanup_rate_limiter
 from backend.api.auditing import AuditingMiddleware
@@ -245,6 +245,7 @@ app.include_router(review_admin.router)
 app.include_router(review_notifications.router)
 app.include_router(review_stats.router)
 app.include_router(collections.router)  # Application collections
+app.include_router(review_assignments.router)  # Review assignments
 app.include_router(application_shares.router)  # Share token management (authenticated)
 app.include_router(application_shares.public_router)  # Public shared application access
 
