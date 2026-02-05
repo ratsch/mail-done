@@ -583,11 +583,17 @@ class PaginationInfo(BaseModel):
     total_pages: int
 
 
+class AssignmentSummary(BaseModel):
+    """Summary stats for the current user's assignments"""
+    total_pending: int = 0
+    total_overdue: int = 0
+
+
 class AssignmentListResponse(BaseModel):
     """Response for listing assignments"""
     assignments: List[AssignmentResponse]
     pagination: PaginationInfo
-    summary: Dict[str, int]  # total_pending, total_overdue
+    summary: AssignmentSummary
 
 
 class BatchStatsInfo(BaseModel):

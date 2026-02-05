@@ -34,12 +34,13 @@ from backend.api.review_auth import get_current_user_hybrid
 from backend.api.review_schemas import (
     CreateAssignmentRequest, CreateAssignmentResponse, DuplicateAssignmentInfo,
     AddToBatchRequest,
-    AssignmentResponse, AssignmentListResponse, PaginationInfo,
+    AssignmentResponse, AssignmentListResponse, AssignmentSummary, PaginationInfo,
     BatchResponse, BatchListResponse, BatchDetailResponse, BatchStatsInfo,
     SharedWithInfo, UpdateBatchRequest,
     DeclineAssignmentRequest, ApplicationAssignmentResponse,
     PreviewBulkAssignmentRequest, PreviewBulkAssignmentResponse,
     PreviewApplicationInfo, PreviewDuplicateInfo,
+    UserResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,6 +228,32 @@ def complete_assignments_on_review(db: Session, email_id, reviewer_id):
 # ============================================================================
 # Endpoints
 # ============================================================================
+
+@router.get("/reviewers", response_model=List[UserResponse])
+async def list_reviewers(
+    current_user: LabMember = Depends(get_current_user_hybrid),
+    db: Session = Depends(get_db),
+):
+    """List active users with can_review=true. Any authenticated user can call this."""
+    reviewers = db.query(LabMember).filter(
+        LabMember.is_active == True,
+        LabMember.can_review == True,
+    ).order_by(LabMember.full_name).all()
+
+    return [
+        UserResponse(
+            id=r.id,
+            email=r.email,
+            full_name=r.full_name,
+            role=r.role,
+            can_review=r.can_review,
+            is_active=r.is_active,
+            avatar_url=r.avatar_url if hasattr(r, 'avatar_url') else None,
+            created_at=r.created_at,
+        )
+        for r in reviewers
+    ]
+
 
 @router.post("", response_model=CreateAssignmentResponse)
 async def create_assignments(
@@ -426,7 +453,7 @@ async def list_my_assignments(
             total_items=total_items,
             total_pages=total_pages,
         ),
-        summary={"total_pending": total_pending, "total_overdue": total_overdue},
+        summary=AssignmentSummary(total_pending=total_pending, total_overdue=total_overdue),
     )
 
 
@@ -540,14 +567,14 @@ async def get_batch_detail(
     )
 
 
-@router.patch("/batch/{batch_id}")
+@router.patch("/batch/{batch_id}", response_model=BatchResponse)
 async def update_batch(
     batch_id: UUID,
     request: UpdateBatchRequest,
     current_user: LabMember = Depends(get_current_user_hybrid),
     db: Session = Depends(get_db),
 ):
-    """Update batch metadata (notes, deadline, shares)."""
+    """Update batch metadata (notes, deadline, shares). Returns updated batch."""
     batch = db.query(AssignmentBatch).filter(AssignmentBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Batch not found"})
@@ -579,8 +606,12 @@ async def update_batch(
 
     batch.updated_at = datetime.now(timezone.utc)
     db.commit()
+    db.refresh(batch)
 
-    return {"message": "Batch updated successfully"}
+    # Return updated batch with stats
+    stats_map = _get_batch_stats_map(db, [batch.id])
+    b_stats = stats_map.get(batch.id, BatchStatsInfo())
+    return _build_batch_response(batch, current_user, b_stats, True)
 
 
 @router.delete("/batch/{batch_id}")
@@ -684,7 +715,6 @@ async def get_application_assignments(
     items = []
     for a in assignments:
         batch = a.batch
-        is_overdue = a.status == "pending" and _is_past(batch.deadline)
 
         items.append(ApplicationAssignmentResponse(
             id=a.id,
@@ -798,23 +828,29 @@ async def preview_bulk_assignment(
     duplicates = []
 
     for email, metadata in results:
-        # Check if already assigned to any of the requested reviewers
-        existing = db.query(ApplicationReviewAssignment).filter(
+        # Check per-reviewer: which of the requested reviewers are already assigned
+        existing_assignments = db.query(ApplicationReviewAssignment).filter(
             ApplicationReviewAssignment.email_id == email.id,
             ApplicationReviewAssignment.assigned_to.in_(request.assigned_to),
-        ).first()
+        ).all()
 
-        if existing:
+        already_assigned_reviewers = {a.assigned_to for a in existing_assignments}
+
+        # Report each existing assignment as a duplicate
+        for ea in existing_assignments:
             existing_batch = db.query(AssignmentBatch).filter(
-                AssignmentBatch.id == existing.batch_id,
+                AssignmentBatch.id == ea.batch_id,
             ).first()
             duplicates.append(PreviewDuplicateInfo(
                 email_id=email.id,
                 applicant_name=metadata.applicant_name,
-                existing_batch_id=existing.batch_id,
+                existing_batch_id=ea.batch_id,
                 existing_assigner=existing_batch.creator.full_name if existing_batch and existing_batch.creator else None,
             ))
-        else:
+
+        # If at least one requested reviewer is NOT already assigned, it's a new assignment
+        has_new_reviewers = len(already_assigned_reviewers) < len(request.assigned_to)
+        if has_new_reviewers:
             applications.append(PreviewApplicationInfo(
                 email_id=email.id,
                 applicant_name=metadata.applicant_name,

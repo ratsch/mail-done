@@ -806,8 +806,8 @@ class TestEdgeCases:
         assert data["stats"]["completed"] == 1
         assert data["stats"]["total"] == 1
 
-    def test_batch_update_persists(self, client, admin_token, sample_batch, test_db):
-        """After updating batch notes, getting batch detail reflects changes."""
+    def test_batch_update_returns_batch_data(self, client, admin_token, sample_batch, test_db):
+        """PATCH response returns updated batch with stats."""
         batch, _ = sample_batch
         new_notes = "Freshly updated notes"
         resp = client.patch(
@@ -816,11 +816,37 @@ class TestEdgeCases:
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert resp.status_code == 200
+        data = resp.json()
+        # Verify the response is a full BatchResponse, not just a message
+        assert data["notes"] == new_notes
+        assert "stats" in data
+        assert data["stats"]["total"] == 1
+        assert data["is_owner"] is True
 
-        # Verify via batch detail endpoint
-        resp = client.get(f"/assignments/batch/{batch.id}", headers={"Authorization": f"Bearer {admin_token}"})
+    def test_preview_per_reviewer_duplicates(self, client, admin_token, reviewer_user, reviewer_user2, sample_application, sample_batch):
+        """Preview should report as new if at least one reviewer isn't already assigned."""
+        email, _ = sample_application
+        # reviewer_user is already assigned via sample_batch, reviewer_user2 is not
+        resp = client.post(
+            "/assignments/preview",
+            json={
+                "date_from": (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d"),
+                "date_to": datetime.utcnow().strftime("%Y-%m-%d"),
+                "assigned_to": [str(reviewer_user.id), str(reviewer_user2.id)],
+            },
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
         assert resp.status_code == 200
-        assert resp.json()["notes"] == new_notes
+        data = resp.json()
+        # Should have 1 duplicate (reviewer_user) AND the app should still appear in applications
+        # because reviewer_user2 is not yet assigned
+        assert data["already_assigned"] >= 1
+        assert data["new_to_assign"] >= 1
+        # The same email_id should appear in both applications and duplicates
+        dup_eids = {d["email_id"] for d in data["duplicates"]}
+        app_eids = {a["email_id"] for a in data["applications"]}
+        assert str(email.id) in dup_eids
+        assert str(email.id) in app_eids
 
     def test_decline_then_reassign(self, client, admin_token, reviewer_token, reviewer_user, reviewer_user2, sample_batch, test_db):
         """After declining, the same app can be assigned to another reviewer."""
@@ -845,3 +871,28 @@ class TestEdgeCases:
         )
         assert resp.status_code == 200
         assert resp.json()["created"] == 1
+
+
+# ============================================================================
+# GET /assignments/reviewers — List reviewers
+# ============================================================================
+
+class TestListReviewers:
+    def test_returns_reviewers(self, client, reviewer_token, reviewer_user, reviewer_user2, admin_user):
+        resp = client.get("/assignments/reviewers", headers={"Authorization": f"Bearer {reviewer_token}"})
+        assert resp.status_code == 200
+        data = resp.json()
+        # Should include reviewer_user, reviewer_user2, and admin_user (who has can_review=True)
+        ids = {r["id"] for r in data}
+        assert str(reviewer_user.id) in ids
+        assert str(reviewer_user2.id) in ids
+
+    def test_excludes_non_reviewers(self, client, reviewer_token, regular_user):
+        resp = client.get("/assignments/reviewers", headers={"Authorization": f"Bearer {reviewer_token}"})
+        assert resp.status_code == 200
+        ids = {r["id"] for r in resp.json()}
+        assert str(regular_user.id) not in ids
+
+    def test_requires_auth(self, client):
+        resp = client.get("/assignments/reviewers")
+        assert resp.status_code in (401, 403)

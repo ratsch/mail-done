@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, cast, Boolean, case, extract
 from sqlalchemy import text
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 import logging
 
@@ -264,7 +264,7 @@ async def get_overview_stats(
                 ApplicationReviewAssignment.assigned_to == current_user.id,
                 ApplicationReviewAssignment.status == "pending",
                 AssignmentBatch.deadline.isnot(None),
-                AssignmentBatch.deadline < datetime.utcnow(),
+                AssignmentBatch.deadline < datetime.now(timezone.utc),
             ).scalar() or 0
         except Exception as e:
             logger.warning(f"Failed to get assignment stats: {e}")
