@@ -165,6 +165,9 @@ async def verify_signed_request(request: Request) -> AuthContext:
         # Static client verification succeeded - we're done
         # (nonce replay protection not implemented for static clients as they
         # are typically single-instance laptop scripts, not web browsers)
+
+        # Set user_email if configured (enables access to user-scoped endpoints like review)
+        user_email = static_client.user_email
     else:
         # Try ephemeral session registry
         # Client ID format for ephemeral: "webui-xxx" or "v0-portal-xxx"

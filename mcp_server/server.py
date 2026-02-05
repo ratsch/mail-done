@@ -679,11 +679,18 @@ Returns the actual folder structure from the mail server, including:
 - Sent, Drafts, Trash, Archive
 - Custom folders and subfolders
 
-Use this to discover what email folders exist before listing emails.""",
+Use this to discover what email folders exist before listing emails.
+
+**Account parameter:** Specify which email account to query (e.g., 'personal', 'work', 'eth').""",
             inputSchema={
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "account": {
+                        "type": "string",
+                        "description": "Email account to query (e.g., 'personal', 'work', 'eth')"
+                    }
+                },
+                "required": ["account"]
             }
         ),
         Tool(
@@ -716,9 +723,13 @@ Uses IMAP STATUS command - very fast, no message data is fetched.
                     "folder": {
                         "type": "string",
                         "description": "Folder name/path (e.g., 'INBOX', 'Sent', 'Old Sent Messages/2016')"
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": "Email account to query (e.g., 'personal', 'work', 'eth')"
                     }
                 },
-                "required": ["folder"]
+                "required": ["folder", "account"]
             }
         ),
         Tool(
@@ -756,13 +767,224 @@ Emails are returned newest first.""",
                     "since_date": {
                         "type": "string",
                         "description": "Only return messages since this date (YYYY-MM-DD format)"
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": "Email account to query (e.g., 'personal', 'work', 'eth')"
                     }
                 },
-                "required": ["folder"]
+                "required": ["folder", "account"]
+            }
+        ),
+        # ==========================================================================
+        # APPLICATION REVIEW TOOLS
+        # ==========================================================================
+        Tool(
+            name="list_applications",
+            description="""[APPLICATION] List and search PhD/postdoc/intern applications.
+
+Returns applications with filters matching the Application Review Portal functionality.
+
+**Filters available:**
+- category: 'application-phd', 'application-postdoc', 'application-intern'
+- min_recommendation_score: Overall recommendation (1-10)
+- min_excellence_score: Scientific excellence (1-10)
+- min_research_fit_score: Research fit (1-10)
+- search_name: Partial name match
+- profile_tags: Filter by tags (e.g., 'ml-experience', 'genomics')
+- highest_degree: Filter by degree (e.g., 'PhD', 'Masters')
+- application_status: 'pending', 'reviewed', 'decided'
+- has_decision: true/false
+- received_after/received_before: Date range (YYYY-MM-DD)
+
+**Results include:**
+- Applicant name, institution, date
+- All AI scores (scientific excellence, research fit, recommendation)
+- Technical experience scores
+- Review ratings and decision status
+- Google Drive folder links""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["application-phd", "application-postdoc", "application-intern", "application-visiting"],
+                        "description": "Filter by application type"
+                    },
+                    "min_recommendation_score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Minimum overall recommendation score (1-10)"
+                    },
+                    "min_excellence_score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Minimum scientific excellence score (1-10)"
+                    },
+                    "min_research_fit_score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Minimum research fit score (1-10)"
+                    },
+                    "search_name": {
+                        "type": "string",
+                        "description": "Search by applicant name (partial match)"
+                    },
+                    "received_after": {
+                        "type": "string",
+                        "description": "Only applications received after this date (YYYY-MM-DD)"
+                    },
+                    "received_before": {
+                        "type": "string",
+                        "description": "Only applications received before this date (YYYY-MM-DD)"
+                    },
+                    "application_status": {
+                        "type": "string",
+                        "enum": ["pending", "reviewed", "decided"],
+                        "description": "Filter by application status"
+                    },
+                    "has_decision": {
+                        "type": "boolean",
+                        "description": "Filter by whether application has a decision"
+                    },
+                    "application_source": {
+                        "type": "string",
+                        "description": "Filter by source (e.g., 'ai_center', 'direct')"
+                    },
+                    "collection_id": {
+                        "type": "string",
+                        "description": "Filter by collection UUID"
+                    },
+                    "profile_tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by profile tags (AND logic - all must be present)"
+                    },
+                    "highest_degree": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by degree level (OR logic - any match)"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["date", "overall_recommendation_score", "scientific_excellence_score", "research_fit_score", "applicant_name"],
+                        "description": "Sort field (default: date)"
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "description": "Sort order (default: desc)"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Page number (default: 1)",
+                        "default": 1
+                    },
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Results per page (default: 20, max: 100)",
+                        "default": 20
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_application_details",
+            description="""[APPLICATION] Get full details of a specific application.
+
+Given an application email ID, returns complete information including:
+
+**Applicant Info:**
+- Name, email, institution, nationality
+- Current situation, highest degree
+- Online profiles (GitHub, LinkedIn, Google Scholar)
+
+**AI Scores with Reasons:**
+- Scientific excellence score and reasoning
+- Research fit score and reasoning
+- Overall recommendation score and reasoning
+
+**Technical Experience Scores:**
+- Coding experience (with evidence)
+- Omics/genomics experience
+- Medical data experience
+- Sequence analysis experience
+- Image analysis experience
+
+**AI Evaluation:**
+- Summary of application
+- Key strengths and concerns
+- Suggested next steps
+
+**Google Drive Links:**
+- Folder path with all application materials
+- Email text link
+- Attachment links (CV, publications, etc.)
+- Consolidated and reference letter attachments
+
+**Reviews:**
+- Average rating from reviewers
+- Individual reviews with comments
+- Final decision (if made)
+
+Use after list_applications to get full details of interesting candidates.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "email_id": {
+                        "type": "string",
+                        "description": "UUID of the application email"
+                    }
+                },
+                "required": ["email_id"]
+            }
+        ),
+        Tool(
+            name="get_application_tags",
+            description="""[APPLICATION] Get available profile tags for filtering applications.
+
+Returns all profile tags that have been assigned to applications, with counts.
+
+**Example tags:**
+- ml-experience: Machine learning experience
+- genomics: Genomics background
+- clinical: Clinical research experience
+- industry: Industry experience
+
+Use these tags with list_applications profile_tags filter.""",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_application_collections",
+            description="""[APPLICATION] Get available application collections.
+
+Collections are named groups of applications for organizational purposes.
+
+Returns list of collections with:
+- Collection ID (UUID)
+- Collection name
+- Application count
+
+Use collection_id with list_applications to filter by collection.""",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         )
     ]
-    
+
     # Add email attachment tools if enabled
     if MCP_ENABLE_FILE_DOWNLOADS:
         TOOLS.extend([
@@ -987,16 +1209,20 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
                         )
 
             elif name == "list_imap_folders":
-                result = await client.list_imap_folders()
-            
+                result = await client.list_imap_folders(
+                    account=arguments["account"]
+                )
+
             elif name == "get_imap_folder_status":
                 result = await client.get_folder_status(
-                    folder=arguments["folder"]
+                    folder=arguments["folder"],
+                    account=arguments["account"]
                 )
 
             elif name == "list_imap_folder_emails":
                 result = await client.list_folder_emails(
                     folder=arguments["folder"],
+                    account=arguments["account"],
                     limit=arguments.get("limit", 50),
                     since_date=arguments.get("since_date")
                 )
@@ -1048,7 +1274,42 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
                     result = await client.clear_attachment_cache(
                         older_than_days=arguments.get("older_than_days")
                     )
-            
+
+            # ==========================================================================
+            # APPLICATION REVIEW HANDLERS
+            # ==========================================================================
+            elif name == "list_applications":
+                result = await client.list_applications(
+                    category=arguments.get("category"),
+                    min_recommendation_score=arguments.get("min_recommendation_score"),
+                    min_excellence_score=arguments.get("min_excellence_score"),
+                    min_research_fit_score=arguments.get("min_research_fit_score"),
+                    search_name=arguments.get("search_name"),
+                    received_after=arguments.get("received_after"),
+                    received_before=arguments.get("received_before"),
+                    application_status=arguments.get("application_status"),
+                    has_decision=arguments.get("has_decision"),
+                    application_source=arguments.get("application_source"),
+                    collection_id=arguments.get("collection_id"),
+                    profile_tags=arguments.get("profile_tags"),
+                    highest_degree=arguments.get("highest_degree"),
+                    sort_by=arguments.get("sort_by"),
+                    sort_order=arguments.get("sort_order"),
+                    page=arguments.get("page", 1),
+                    page_size=arguments.get("page_size", 20)
+                )
+
+            elif name == "get_application_details":
+                result = await client.get_application_details(
+                    email_id=arguments["email_id"]
+                )
+
+            elif name == "get_application_tags":
+                result = await client.get_application_available_tags()
+
+            elif name == "get_application_collections":
+                result = await client.get_application_collections()
+
             else:
                 result = {"error": f"Unknown tool: {name}"}
             

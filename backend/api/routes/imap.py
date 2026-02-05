@@ -99,13 +99,33 @@ def _get_imap_config(account: Optional[str] = None) -> tuple[IMAPConfig, str]:
         imap_config = manager.get_imap_config(account_nickname)
         
         # Validate credentials are present
-        if not imap_config.username or not imap_config.password:
-            sanitized = account_nickname.upper().replace('-', '_').replace(' ', '_')
+        # For OAuth2 accounts, we need username + oauth2 credentials (refresh_token or client_secret)
+        # For password accounts, we need username + password
+        sanitized = account_nickname.upper().replace('-', '_').replace(' ', '_')
+
+        if not imap_config.username:
             raise HTTPException(
                 status_code=503,
-                detail=f"IMAP credentials not configured for account '{account_nickname}'. "
-                       f"Set IMAP_USERNAME_{sanitized} and IMAP_PASSWORD_{sanitized}."
+                detail=f"IMAP username not configured for account '{account_nickname}'. "
+                       f"Set IMAP_USERNAME_{sanitized}."
             )
+
+        if imap_config.auth_type == "oauth2":
+            # OAuth2 authentication - check for refresh token or client secret
+            if not imap_config.oauth2_refresh_token and not imap_config.oauth2_client_secret:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"OAuth2 credentials not configured for account '{account_nickname}'. "
+                           f"Set OAUTH2_REFRESH_TOKEN_{sanitized} or OAUTH2_CLIENT_SECRET_{sanitized}."
+                )
+        else:
+            # Password authentication
+            if not imap_config.password:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"IMAP password not configured for account '{account_nickname}'. "
+                           f"Set IMAP_PASSWORD_{sanitized}."
+                )
         
         return imap_config, account_nickname
         

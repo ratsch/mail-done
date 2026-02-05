@@ -1417,40 +1417,35 @@ class EmailAPIClient:
             "origin_used": origin_info,
         }
 
-    async def list_imap_folders(self) -> Dict[str, Any]:
+    async def list_imap_folders(self, account: str) -> Dict[str, Any]:
         """
         List all folders on the IMAP server.
-        
+
         Calls: GET /api/imap/folders
-        
-        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
-        
+
+        Args:
+            account: Email account to query (e.g., 'personal', 'work', 'eth')
+
         Returns:
             Dict with folders list and total count
         """
-        params = {}
-        if self.allowed_account:
-            # Use only the first account if comma-separated
-            account = self.allowed_account.split(',')[0].strip()
-            params["account"] = account
-        
+        params = {"account": account}
         result = await self._request("GET", "/api/imap/folders", params=params)
         return result
     
-    async def get_folder_status(self, folder: str) -> Dict[str, Any]:
+    async def get_folder_status(self, folder: str, account: str) -> Dict[str, Any]:
         """
         Get folder status (message counts) using IMAP STATUS command.
-        
+
         This is the most efficient way to get folder statistics without
         fetching any messages.
-        
+
         Calls: GET /api/imap/folders/{folder}/status
-        
-        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
-        
+
         Args:
             folder: Folder name (e.g., "INBOX", "Sent", "Archive/2024")
-            
+            account: Email account to query (e.g., 'personal', 'work', 'eth')
+
         Returns:
             Dict with:
             - folder: Folder name
@@ -1461,12 +1456,7 @@ class EmailAPIClient:
             - uidvalidity: UID validity value
             - account: Account used
         """
-        params = {}
-        
-        # Add account parameter from MCP_ALLOWED_ACCOUNT
-        if self.allowed_account:
-            account = self.allowed_account.split(',')[0].strip()
-            params["account"] = account
+        params = {"account": account}
         
         # URL encode the folder path (handle slashes)
         from urllib.parse import quote
@@ -1478,38 +1468,34 @@ class EmailAPIClient:
     async def list_folder_emails(
         self,
         folder: str,
+        account: str,
         limit: int = 50,
         since_date: Optional[str] = None,
         include_headers: bool = True
     ) -> Dict[str, Any]:
         """
         List emails in a specific IMAP folder.
-        
+
         Calls: GET /api/imap/folders/{folder}/messages
-        
-        Uses MCP_ALLOWED_ACCOUNT to determine which account to query.
-        
+
         Args:
             folder: Folder name (e.g., "INBOX", "Sent", "Archive/2024")
+            account: Email account to query (e.g., 'personal', 'work', 'eth')
             limit: Maximum number of messages (default: 50, max: 500)
             since_date: Only messages since this date (YYYY-MM-DD)
             include_headers: Include full headers like subject, from, date (default: True)
-            
+
         Returns:
             Dict with folder name, messages list, and total count
         """
         params = {
+            "account": account,
             "limit": min(limit, 500),  # Enforce max
             "include_headers": str(include_headers).lower()
         }
-        
+
         if since_date:
             params["since_date"] = since_date
-        
-        # Add account parameter from MCP_ALLOWED_ACCOUNT
-        if self.allowed_account:
-            account = self.allowed_account.split(',')[0].strip()
-            params["account"] = account
         
         # URL encode the folder path (handle slashes)
         from urllib.parse import quote
@@ -1564,3 +1550,322 @@ class EmailAPIClient:
             "bytes_freed": bytes_freed,
             "cache_dir": str(cache_dir)
         }
+
+    # ==========================================================================
+    # APPLICATION REVIEW METHODS
+    # ==========================================================================
+
+    async def list_applications(
+        self,
+        category: Optional[str] = None,
+        min_recommendation_score: Optional[int] = None,
+        min_excellence_score: Optional[int] = None,
+        min_research_fit_score: Optional[int] = None,
+        search_name: Optional[str] = None,
+        received_after: Optional[str] = None,
+        received_before: Optional[str] = None,
+        application_status: Optional[str] = None,
+        has_decision: Optional[bool] = None,
+        application_source: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        profile_tags: Optional[List[str]] = None,
+        highest_degree: Optional[List[str]] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> Dict[str, Any]:
+        """
+        List applications with filters.
+
+        Calls: GET /applications
+
+        Args:
+            category: Filter by category (e.g., 'application-phd', 'application-postdoc', 'application-intern')
+            min_recommendation_score: Minimum overall recommendation score (1-10)
+            min_excellence_score: Minimum scientific excellence score (1-10)
+            min_research_fit_score: Minimum research fit score (1-10)
+            search_name: Search by applicant name (partial match)
+            received_after: Filter by date (YYYY-MM-DD)
+            received_before: Filter by date (YYYY-MM-DD)
+            application_status: Filter by status ('pending', 'reviewed', 'decided')
+            has_decision: Filter by whether application has a decision
+            application_source: Filter by source (e.g., 'ai_center')
+            collection_id: Filter by collection UUID
+            profile_tags: Filter by profile tags (AND logic - all must be present)
+            highest_degree: Filter by degree (OR logic - any match)
+            sort_by: Sort field (e.g., 'date', 'overall_recommendation_score')
+            sort_order: 'asc' or 'desc'
+            page: Page number (1-indexed)
+            page_size: Results per page
+
+        Returns:
+            Dict with 'applications' list, 'total', 'page', 'page_size'
+        """
+        params = {
+            "page": page,
+            "limit": page_size  # Backend uses "limit" not "page_size"
+        }
+
+        if category:
+            params["category"] = category
+        if min_recommendation_score is not None:
+            params["min_recommendation_score"] = min_recommendation_score
+        if min_excellence_score is not None:
+            params["min_excellence_score"] = min_excellence_score
+        if min_research_fit_score is not None:
+            params["min_research_fit_score"] = min_research_fit_score
+        if search_name:
+            params["search_name"] = search_name
+        if received_after:
+            params["received_after"] = received_after
+        if received_before:
+            params["received_before"] = received_before
+        if application_status:
+            params["application_status"] = application_status
+        if has_decision is not None:
+            params["has_decision"] = has_decision
+        if application_source:
+            params["application_source"] = application_source
+        if collection_id:
+            params["collection_id"] = collection_id
+        if profile_tags:
+            # API expects comma-separated or multiple params
+            params["profile_tags"] = ",".join(profile_tags)
+        if highest_degree:
+            params["highest_degree"] = ",".join(highest_degree)
+        if sort_by:
+            params["sort_by"] = sort_by
+        if sort_order:
+            params["sort_order"] = sort_order
+
+        result = await self._request("GET", "/applications", params=params)
+
+        if "error" not in result:
+            # Transform results for MCP consumption
+            # Backend returns "items" not "applications"
+            applications = result.get("items", [])
+            return {
+                "total": result.get("total", len(applications)),
+                "page": result.get("page", page),
+                "page_size": page_size,
+                "applications": [
+                    self._transform_application_list_item(app)
+                    for app in applications
+                ]
+            }
+        return result
+
+    def _transform_application_list_item(self, app: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform application list item for MCP output."""
+        return {
+            "email_id": app.get("email_id"),
+            "applicant_name": app.get("applicant_name"),
+            "applicant_institution": app.get("applicant_institution"),
+            "date": app.get("date"),
+            "category": app.get("category"),
+            "scores": {
+                "scientific_excellence": app.get("scientific_excellence_score"),
+                "research_fit": app.get("research_fit_score"),
+                "overall_recommendation": app.get("overall_recommendation_score"),
+                "relevance": app.get("relevance_score")
+            },
+            "technical_scores": {
+                "coding": app.get("coding_experience_score"),
+                "medical_data": app.get("medical_data_experience_score"),
+                "omics_genomics": app.get("omics_genomics_experience_score"),
+                "sequence_analysis": app.get("sequence_analysis_experience_score"),
+                "image_analysis": app.get("image_analysis_experience_score")
+            },
+            "review_summary": {
+                "avg_rating": app.get("avg_rating"),
+                "num_ratings": app.get("num_ratings"),
+                "my_rating": app.get("my_rating")
+            },
+            "status": app.get("status"),
+            "decision": app.get("decision"),
+            "profile_tags": app.get("profile_tags"),
+            "highest_degree": app.get("highest_degree"),
+            "application_source": app.get("application_source"),
+            "folder_path": app.get("folder_path"),
+            "email_text_link": app.get("email_text_link")
+        }
+
+    async def get_application_details(self, email_id: str) -> Dict[str, Any]:
+        """
+        Get full application details.
+
+        Calls: GET /applications/{email_id}
+
+        Args:
+            email_id: Application email UUID
+
+        Returns:
+            Full application details including scores, attachments, GDrive links, reviews
+        """
+        result = await self._request("GET", f"/applications/{email_id}")
+
+        if "error" not in result:
+            return self._transform_application_detail(result)
+        return result
+
+    def _transform_application_detail(self, app: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform application detail for MCP output with structured organization."""
+        return {
+            # Basic info
+            "email_id": app.get("email_id"),
+            "date": app.get("date"),
+            "subject": app.get("subject"),
+            "message_id": app.get("message_id"),
+
+            # Applicant info
+            "applicant": {
+                "name": app.get("applicant_name"),
+                "email": app.get("applicant_email"),
+                "institution": app.get("applicant_institution"),
+                "nationality": app.get("nationality"),
+                "highest_degree": app.get("highest_degree"),
+                "current_situation": app.get("current_situation"),
+                "recent_thesis_title": app.get("recent_thesis_title"),
+                "recommendation_source": app.get("recommendation_source"),
+                "online_profiles": {
+                    "github": app.get("github_account"),
+                    "linkedin": app.get("linkedin_account"),
+                    "google_scholar": app.get("google_scholar_account")
+                }
+            },
+
+            # Classification
+            "classification": {
+                "category": app.get("category"),
+                "subcategory": app.get("subcategory"),
+                "confidence": app.get("confidence"),
+                "application_source": app.get("application_source")
+            },
+
+            # Scores with reasons
+            "scores": {
+                "scientific_excellence": {
+                    "score": app.get("scientific_excellence_score"),
+                    "reason": app.get("scientific_excellence_reason")
+                },
+                "research_fit": {
+                    "score": app.get("research_fit_score"),
+                    "reason": app.get("research_fit_reason")
+                },
+                "overall_recommendation": {
+                    "score": app.get("overall_recommendation_score"),
+                    "reason": app.get("recommendation_reason")
+                },
+                "relevance": {
+                    "score": app.get("relevance_score"),
+                    "reason": app.get("relevance_reason")
+                }
+            },
+
+            # Technical experience scores
+            "technical_experience": {
+                "coding": {
+                    "score": app.get("coding_experience_score"),
+                    "evidence": app.get("coding_experience_evidence")
+                },
+                "omics_genomics": {
+                    "score": app.get("omics_genomics_experience_score"),
+                    "evidence": app.get("omics_genomics_experience_evidence")
+                },
+                "medical_data": {
+                    "score": app.get("medical_data_experience_score"),
+                    "evidence": app.get("medical_data_experience_evidence")
+                },
+                "sequence_analysis": {
+                    "score": app.get("sequence_analysis_experience_score"),
+                    "evidence": app.get("sequence_analysis_experience_evidence")
+                },
+                "image_analysis": {
+                    "score": app.get("image_analysis_experience_score"),
+                    "evidence": app.get("image_analysis_experience_evidence")
+                }
+            },
+
+            # AI evaluation
+            "ai_evaluation": {
+                "summary": app.get("summary"),
+                "reasoning": app.get("reasoning"),
+                "key_strengths": app.get("key_strengths"),
+                "concerns": app.get("concerns"),
+                "next_steps": app.get("next_steps"),
+                "additional_notes": app.get("additional_notes")
+            },
+
+            # Profile tags and flags
+            "profile_tags": app.get("profile_tags"),
+            "red_flags": {
+                "is_mass_email": app.get("is_mass_email"),
+                "no_research_background": app.get("no_research_background"),
+                "irrelevant_field": app.get("irrelevant_field"),
+                "insufficient_materials": app.get("insufficient_materials"),
+                "is_cold_email": app.get("is_cold_email"),
+                "is_not_application": app.get("is_not_application"),
+                "is_not_application_reason": app.get("is_not_application_reason")
+            },
+
+            # Google Drive files
+            "google_drive": {
+                "folder_id": app.get("folder_path"),
+                "email_text_link": app.get("email_text_link"),
+                "llm_response_link": app.get("llm_response_link"),
+                "attachments": app.get("attachments_list", []),
+                "consolidated_attachments": app.get("consolidated_attachments", []),
+                "reference_letter_attachments": app.get("reference_letter_attachments", [])
+            },
+
+            # Review system
+            "reviews": {
+                "avg_rating": app.get("avg_rating"),
+                "num_ratings": app.get("num_ratings"),
+                "reviews": app.get("reviews", []),
+                "decision": app.get("decision")
+            },
+
+            # Status
+            "status": {
+                "needs_reply": app.get("needs_reply"),
+                "reply_deadline": app.get("reply_deadline"),
+                "reply_suggestion": app.get("reply_suggestion"),
+                "action_items": app.get("action_items"),
+                "suggested_folder": app.get("suggested_folder"),
+                "suggested_labels": app.get("suggested_labels"),
+                "answer_options": app.get("answer_options")
+            },
+
+            # Additional info request
+            "additional_info": {
+                "should_request": app.get("should_request_additional_info"),
+                "missing_items": app.get("missing_information_items"),
+                "potential_score": app.get("potential_recommendation_score")
+            }
+        }
+
+    async def get_application_available_tags(self) -> Dict[str, Any]:
+        """
+        Get available profile tags for filtering.
+
+        Calls: GET /applications/available-tags
+
+        Returns:
+            Dict with 'tags' list containing tag names and counts
+        """
+        result = await self._request("GET", "/applications/available-tags")
+        return result
+
+    async def get_application_collections(self) -> Dict[str, Any]:
+        """
+        Get available application collections.
+
+        Calls: GET /collections
+
+        Returns:
+            Dict with 'collections' list
+        """
+        result = await self._request("GET", "/collections")
+        return result

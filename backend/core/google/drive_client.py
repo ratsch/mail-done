@@ -398,84 +398,107 @@ class GoogleDriveClient:
             logger.warning(f"Failed to trash file (ID: {file_id}): {e}")
             return False
     
-    def upload_file(self, file_path: Path, folder_id: str, file_name: Optional[str] = None) -> Dict[str, str]:
+    def upload_file(self, file_path: Path, folder_id: str, file_name: Optional[str] = None, max_retries: int = 3) -> Dict[str, str]:
         """
         Upload a file to Google Drive. If file(s) with the same name already exist,
         the most recent one will be overwritten and the others will be moved to Trash.
-        
+
+        Includes retry logic for transient errors (503, 500, rate limiting).
+
         Args:
             file_path: Local path to the file
             folder_id: Google Drive folder ID where to upload
             file_name: Optional custom file name (defaults to file_path.name)
-            
+            max_retries: Maximum number of retry attempts for transient errors (default: 3)
+
         Returns:
             Dict with 'file_id' and 'web_view_link'
         """
+        import time
+
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
-        
+
         file_name = file_name or file_path.name
-        
+
         # Check if files with the same name already exist
         existing_files = self.find_files_by_name(file_name, folder_id)
-        
+
         # Determine MIME type
         mime_type = self._get_mime_type(file_path)
-        
-        try:
-            media = MediaFileUpload(str(file_path), mimetype=mime_type, resumable=True)
-            
-            if existing_files:
-                # Files are already sorted by modifiedTime desc (most recent first)
-                most_recent_file = existing_files[0]
-                existing_file_id = most_recent_file.get('id')
-                
-                # Update the most recent file
-                logger.debug(f"Updating most recent existing file '{file_name}' (ID: {existing_file_id})")
-                file = self.drive_service.files().update(
-                    fileId=existing_file_id,
-                    media_body=media,
-                    fields='id, webViewLink',
-                    supportsAllDrives=True
-                ).execute()
-                
-                # Trash all other duplicate files (if any)
-                if len(existing_files) > 1:
-                    duplicate_count = len(existing_files) - 1
-                    logger.info(f"Found {len(existing_files)} files with name '{file_name}'. Keeping most recent (ID: {existing_file_id}), trashing {duplicate_count} duplicate(s)")
-                    for duplicate_file in existing_files[1:]:  # Skip the first (most recent) one
-                        duplicate_id = duplicate_file.get('id')
-                        if self.trash_file(duplicate_id):
-                            logger.debug(f"Trashed duplicate file '{file_name}' (ID: {duplicate_id})")
-                        else:
-                            logger.warning(f"Failed to trash duplicate file '{file_name}' (ID: {duplicate_id})")
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                media = MediaFileUpload(str(file_path), mimetype=mime_type, resumable=True)
+
+                if existing_files:
+                    # Files are already sorted by modifiedTime desc (most recent first)
+                    most_recent_file = existing_files[0]
+                    existing_file_id = most_recent_file.get('id')
+
+                    # Update the most recent file
+                    logger.debug(f"Updating most recent existing file '{file_name}' (ID: {existing_file_id})")
+                    file = self.drive_service.files().update(
+                        fileId=existing_file_id,
+                        media_body=media,
+                        fields='id, webViewLink',
+                        supportsAllDrives=True
+                    ).execute()
+
+                    # Trash all other duplicate files (if any)
+                    if len(existing_files) > 1:
+                        duplicate_count = len(existing_files) - 1
+                        logger.info(f"Found {len(existing_files)} files with name '{file_name}'. Keeping most recent (ID: {existing_file_id}), trashing {duplicate_count} duplicate(s)")
+                        for duplicate_file in existing_files[1:]:  # Skip the first (most recent) one
+                            duplicate_id = duplicate_file.get('id')
+                            if self.trash_file(duplicate_id):
+                                logger.debug(f"Trashed duplicate file '{file_name}' (ID: {duplicate_id})")
+                            else:
+                                logger.warning(f"Failed to trash duplicate file '{file_name}' (ID: {duplicate_id})")
+                    else:
+                        logger.debug(f"Found 1 existing file '{file_name}', updating it")
                 else:
-                    logger.debug(f"Found 1 existing file '{file_name}', updating it")
-            else:
-                # Create new file
-                file_metadata = {
-                    'name': file_name,
-                    'parents': [folder_id]
+                    # Create new file
+                    file_metadata = {
+                        'name': file_name,
+                        'parents': [folder_id]
+                    }
+                    file = self.drive_service.files().create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields='id, webViewLink',
+                        supportsAllDrives=True
+                    ).execute()
+
+                file_id = file.get('id')
+                web_view_link = file.get('webViewLink')
+
+                action = "Updated" if existing_files else "Uploaded"
+                logger.debug(f"{action} file '{file_name}' (ID: {file_id})")
+                return {
+                    'file_id': file_id,
+                    'web_view_link': web_view_link
                 }
-                file = self.drive_service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields='id, webViewLink',
-                    supportsAllDrives=True
-                ).execute()
-            
-            file_id = file.get('id')
-            web_view_link = file.get('webViewLink')
-            
-            action = "Updated" if existing_files else "Uploaded"
-            logger.debug(f"{action} file '{file_name}' (ID: {file_id})")
-            return {
-                'file_id': file_id,
-                'web_view_link': web_view_link
-            }
-        except HttpError as e:
-            logger.error(f"Failed to upload file '{file_name}': {e}")
-            raise
+            except HttpError as e:
+                last_error = e
+                # Check if it's a transient error (503, 500, 429 rate limit)
+                status_code = e.resp.status if hasattr(e, 'resp') and e.resp else 0
+                is_transient = status_code in (500, 502, 503, 504, 429) or 'transient' in str(e).lower()
+
+                if is_transient and attempt < max_retries - 1:
+                    # Exponential backoff: 2s, 4s, 8s
+                    delay = 2 ** (attempt + 1)
+                    logger.warning(f"Transient error uploading '{file_name}' (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Failed to upload file '{file_name}': {e}")
+                    raise
+
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
     
     def upload_multiple_files(self, file_paths: List[Tuple[Path, Optional[str]]], folder_id: str) -> List[Dict[str, str]]:
         """

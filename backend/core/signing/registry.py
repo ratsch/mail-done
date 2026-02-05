@@ -18,6 +18,7 @@ clients:
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, FrozenSet
@@ -36,19 +37,21 @@ logger = logging.getLogger(__name__)
 class StaticClient:
     """
     A statically configured client.
-    
+
     Attributes:
         client_id: Unique identifier (e.g., "laptop-admin")
         description: Human-readable description
         public_keys: List of valid public keys (allows key rotation)
         scopes: Granted permission scopes
         enabled: Whether client is active
+        user_email: Optional email to map this client to a user (for review access)
     """
     client_id: str
     description: str
     public_keys: List[Ed25519PublicKey]
     scopes: FrozenSet[Scope]
     enabled: bool = True
+    user_email: Optional[str] = None
     
     def has_public_key(self, public_key: Ed25519PublicKey) -> bool:
         """Check if the given public key belongs to this client."""
@@ -112,7 +115,15 @@ class StaticClientRegistry:
         """Parse a client configuration entry."""
         description = data.get("description", "")
         enabled = data.get("enabled", True)
-        
+
+        # user_email can be set directly or via env var reference like ${MCP_USER_EMAIL}
+        user_email = data.get("user_email")
+        if user_email and user_email.startswith("${") and user_email.endswith("}"):
+            env_var = user_email[2:-1]
+            user_email = os.environ.get(env_var)
+            if user_email:
+                logger.info(f"Client {client_id}: user_email from ${env_var}")
+
         # Parse public keys
         key_strings = data.get("public_keys", [])
         public_keys = []
@@ -122,17 +133,18 @@ class StaticClientRegistry:
                 public_keys.append(pk)
             except ValueError as e:
                 raise ValueError(f"Invalid public key: {e}")
-        
+
         # Parse scopes
         scope_strings = data.get("scopes", [])
         scopes = parse_scopes(scope_strings)
-        
+
         return StaticClient(
             client_id=client_id,
             description=description,
             public_keys=public_keys,
             scopes=scopes,
             enabled=enabled,
+            user_email=user_email,
         )
     
     def _register_client(self, client: StaticClient) -> None:
