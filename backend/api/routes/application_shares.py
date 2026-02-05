@@ -449,25 +449,30 @@ def _build_shared_response(
         application_status = metadata.application_status or "pending"
 
     # Conditional: email content
+    # Use applicant_email for applications (email may be forwarded/uploaded by someone else)
     from_address = None
     subject = None
     email_text = None
     if permissions.get("can_view_email_content"):
-        from_address = email.from_address
+        # Prefer applicant_email for applications, fall back to from_address
+        from_address = metadata.applicant_email or email.from_address
         subject = email.subject
         email_text = email.body_text  # Decrypted automatically by EncryptedText
 
     # Conditional: previous emails from same applicant
+    # Use applicant_email to find related emails (not from_address which may be the forwarder)
     previous_emails = None
-    if permissions.get("can_view_previous_emails") and email.from_address:
+    applicant_email = metadata.applicant_email
+    if permissions.get("can_view_previous_emails") and applicant_email:
         from backend.api.review_schemas import PreviousEmailSummary
 
-        # Query for previous emails from same sender (last 60 days, max 10)
+        # Query for previous emails from same applicant (last 60 days, max 10)
+        # Match on applicant_email in metadata, not from_address
         cutoff_date = datetime.utcnow() - timedelta(days=60)
         previous_results = db.query(Email, EmailMetadata).join(
             EmailMetadata, Email.id == EmailMetadata.email_id
         ).filter(
-            Email.from_address == email.from_address,
+            EmailMetadata.applicant_email == applicant_email,
             Email.id != email.id,
             Email.date >= cutoff_date
         ).order_by(Email.date.desc()).limit(10).all()
