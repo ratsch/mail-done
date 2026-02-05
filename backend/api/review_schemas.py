@@ -460,6 +460,12 @@ class SharedApplicationResponse(BaseModel):
     consolidated_attachments: Optional[List[Dict[str, Any]]]
     reference_letter_attachments: Optional[List[Dict[str, Any]]]
 
+    # Application materials folder
+    google_drive_folder: Optional[str] = Field(
+        None,
+        description="Google Drive folder URL containing application materials"
+    )
+
     # Reviews (conditional - only if can_view_reviews)
     reviews: Optional[List[ReviewResponse]] = None
     avg_rating: Optional[float] = None

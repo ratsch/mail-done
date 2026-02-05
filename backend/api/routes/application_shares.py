@@ -394,6 +394,11 @@ def _build_shared_response(
     gdrive_links = metadata.google_drive_links or {}
     attachment_links = gdrive_links.get('attachments', []) if isinstance(gdrive_links, dict) else []
 
+    # Build Google Drive folder URL from folder ID
+    google_drive_folder = None
+    if metadata.google_drive_folder_id:
+        google_drive_folder = f"https://drive.google.com/drive/folders/{metadata.google_drive_folder_id}"
+
     # Conditional: reviews
     reviews = None
     avg_rating = None
@@ -494,6 +499,9 @@ def _build_shared_response(
         attachments_list=attachment_links,
         consolidated_attachments=category_specific.get('consolidated_attachments'),
         reference_letter_attachments=category_specific.get('reference_letter_attachments'),
+
+        # Application materials folder
+        google_drive_folder=google_drive_folder,
 
         # Conditional fields
         reviews=reviews,
