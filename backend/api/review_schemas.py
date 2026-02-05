@@ -344,6 +344,8 @@ class ShareTokenPermissions(BaseModel):
     """Permissions for a share token"""
     can_view_reviews: bool = Field(False, description="Allow viewing reviews from lab members")
     can_view_decision: bool = Field(False, description="Allow viewing the final decision")
+    can_view_email_content: bool = Field(False, description="Include email address, subject, and body text")
+    can_view_previous_emails: bool = Field(False, description="Include previous emails from this applicant")
 
 
 class CreateShareTokenRequest(BaseModel):
@@ -362,6 +364,8 @@ class CreateShareTokenRequest(BaseModel):
     )
     can_view_reviews: bool = Field(False, description="Allow viewing reviews from lab members")
     can_view_decision: bool = Field(False, description="Allow viewing the final decision")
+    can_view_email_content: bool = Field(False, description="Include email address, subject, and body text")
+    can_view_previous_emails: bool = Field(False, description="Include previous emails from this applicant")
 
 
 class ShareTokenResponse(BaseModel):
@@ -400,11 +404,22 @@ class ShareTokenListItem(BaseModel):
         from_attributes = True
 
 
+class PreviousEmailSummary(BaseModel):
+    """Summary of a previous email from the same applicant"""
+    date: datetime
+    subject: Optional[str]
+    category: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class SharedApplicationResponse(BaseModel):
     """
     Filtered application data for shared view.
 
-    Security: NEVER includes email body, from_address, or private notes.
+    Security: Private notes are NEVER included.
+    Email content and previous emails are conditional based on permissions.
     Reviews and decisions are conditional based on token permissions.
     """
     # Application identifier (for future extensibility)
@@ -474,6 +489,14 @@ class SharedApplicationResponse(BaseModel):
     # Decision (conditional - only if can_view_decision)
     decision: Optional[DecisionResponse] = None
     application_status: Optional[str] = None
+
+    # Email content (conditional - only if can_view_email_content)
+    from_address: Optional[str] = None
+    subject: Optional[str] = None
+    email_text: Optional[str] = None
+
+    # Previous emails (conditional - only if can_view_previous_emails)
+    previous_emails: Optional[List[PreviousEmailSummary]] = None
 
     # Share metadata
     shared_at: datetime = Field(..., description="When this shared view was accessed")

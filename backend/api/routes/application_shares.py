@@ -90,7 +90,9 @@ async def create_share_token(
     # Build permissions dict
     permissions = {
         "can_view_reviews": request_body.can_view_reviews,
-        "can_view_decision": request_body.can_view_decision
+        "can_view_decision": request_body.can_view_decision,
+        "can_view_email_content": request_body.can_view_email_content,
+        "can_view_previous_emails": request_body.can_view_previous_emails
     }
 
     # Create the share token record first to get the ID
@@ -446,6 +448,39 @@ def _build_shared_response(
             )
         application_status = metadata.application_status or "pending"
 
+    # Conditional: email content
+    from_address = None
+    subject = None
+    email_text = None
+    if permissions.get("can_view_email_content"):
+        from_address = email.from_address
+        subject = email.subject
+        email_text = email.body_text  # Decrypted automatically by EncryptedText
+
+    # Conditional: previous emails from same applicant
+    previous_emails = None
+    if permissions.get("can_view_previous_emails") and email.from_address:
+        from backend.api.review_schemas import PreviousEmailSummary
+
+        # Query for previous emails from same sender (last 60 days, max 10)
+        cutoff_date = datetime.utcnow() - timedelta(days=60)
+        previous_results = db.query(Email, EmailMetadata).join(
+            EmailMetadata, Email.id == EmailMetadata.email_id
+        ).filter(
+            Email.from_address == email.from_address,
+            Email.id != email.id,
+            Email.date >= cutoff_date
+        ).order_by(Email.date.desc()).limit(10).all()
+
+        previous_emails = [
+            PreviousEmailSummary(
+                date=e.date,
+                subject=e.subject,
+                category=m.ai_category if m else None
+            )
+            for e, m in previous_results
+        ]
+
     return SharedApplicationResponse(
         # Application identifier
         email_id=email.id,
@@ -509,6 +544,14 @@ def _build_shared_response(
         num_ratings=num_ratings,
         decision=decision,
         application_status=application_status,
+
+        # Email content (conditional)
+        from_address=from_address,
+        subject=subject,
+        email_text=email_text,
+
+        # Previous emails (conditional)
+        previous_emails=previous_emails,
 
         # Share metadata
         shared_at=datetime.utcnow(),
