@@ -457,7 +457,7 @@ def _build_shared_response(
         # Prefer applicant_email for applications, fall back to from_address
         from_address = metadata.applicant_email or email.from_address
         subject = email.subject
-        email_text = email.body_text  # Decrypted automatically by EncryptedText
+        email_text = email.body_text or email.body_markdown  # Fallback to markdown if body_text is empty
 
     # Conditional: previous emails from same applicant
     # Use applicant_email to find related emails (not from_address which may be the forwarder)
