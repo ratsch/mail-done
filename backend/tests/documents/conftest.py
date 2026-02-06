@@ -32,19 +32,25 @@ from backend.api.main import app
 from backend.core.database import get_db
 from backend.core.database.models import Base
 from backend.core.documents.models import (
-    Document, DocumentOrigin, DocumentEmbedding, ExtractionStatus,
+    Document, DocumentOrigin, ExtractionStatus,
 )
 
 
 def _patch_array_columns_for_sqlite(target, connection, **kw):
-    """Replace ARRAY columns with JSON for SQLite compatibility."""
+    """Replace ARRAY columns with JSON for SQLite compatibility.
+
+    Note: This permanently mutates the column type on the Table metadata.
+    This is intentional — SQLAlchemy ORM operations also need JSON type
+    (not ARRAY) when talking to SQLite. Safe for tests since no PostgreSQL
+    document table tests exist in the same process.
+    """
     if connection.dialect.name == "sqlite":
         for col in target.columns:
             if isinstance(col.type, ARRAY):
                 col.type = JSON()
 
 
-# Register the listener on document table
+# Register listener on document table
 event.listen(Document.__table__, "before_create", _patch_array_columns_for_sqlite)
 
 

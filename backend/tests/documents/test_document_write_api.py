@@ -468,6 +468,56 @@ class TestSubmitOCR:
         )
         assert response.status_code == 422
 
+    def test_submit_ocr_sets_ocr_applied(self, client, test_db, needs_ocr_document):
+        """After successful OCR, ocr_applied should be True."""
+        response = client.post(
+            f"/api/documents/{needs_ocr_document.id}/ocr",
+            json={
+                "text": "OCR extracted content. " * 10,
+                "method": "ocr_claude",
+                "quality": 0.9,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["updated"] is True
+
+        test_db.refresh(needs_ocr_document)
+        assert needs_ocr_document.ocr_applied is True
+        assert needs_ocr_document.ocr_pipeline_version == "ocr_claude"
+        assert needs_ocr_document.text_source == "ocr"
+
+    def test_submit_ocr_rejected_does_not_set_ocr_applied(
+        self, client, test_db, sample_document
+    ):
+        """When OCR is rejected (lower quality), ocr_applied should remain False."""
+        response = client.post(
+            f"/api/documents/{sample_document.id}/ocr",
+            json={
+                "text": "Low quality text.",
+                "method": "ocr_tesseract",
+                "quality": 0.1,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["updated"] is False
+
+        test_db.refresh(sample_document)
+        assert sample_document.ocr_applied is False
+
+    def test_submit_ocr_quality_out_of_bounds(self, client, needs_ocr_document):
+        """Quality values outside 0-1 should return 422."""
+        response = client.post(
+            f"/api/documents/{needs_ocr_document.id}/ocr",
+            json={"text": "Some text.", "quality": 1.5},
+        )
+        assert response.status_code == 422
+
+        response = client.post(
+            f"/api/documents/{needs_ocr_document.id}/ocr",
+            json={"text": "Some text.", "quality": -0.1},
+        )
+        assert response.status_code == 422
+
 
 # =============================================================================
 # PATCH /api/documents/{document_id}/metadata
@@ -671,6 +721,22 @@ class TestUpdateMetadata:
         assert data["extraction_method"] == original_method
         assert data["extraction_status"] == original_status
 
+    def test_update_metadata_title_too_long(self, client, sample_document):
+        """Title exceeding max length should return 422."""
+        response = client.patch(
+            f"/api/documents/{sample_document.id}/metadata",
+            json={"title": "x" * 501},
+        )
+        assert response.status_code == 422
+
+    def test_update_metadata_language_too_long(self, client, sample_document):
+        """Language exceeding max length should return 422."""
+        response = client.patch(
+            f"/api/documents/{sample_document.id}/metadata",
+            json={"language": "x" * 11},
+        )
+        assert response.status_code == 422
+
 
 # =============================================================================
 # Integration / Cross-endpoint tests
@@ -701,11 +767,10 @@ class TestWriteAPIIntegration:
         assert response.status_code == 200
         assert response.json()["updated"] is True
 
-        # Step 3: needs_ocr status is now "completed", should no longer match needs_ocr filter
-        # But it might still match ocr_recommended if not updated
-        response = client.get(
-            "/api/documents/pending-ocr?include_ocr_recommended=false"
-        )
+        # Step 3: Document should no longer appear in pending-ocr at all
+        # - extraction_status changed from needs_ocr → completed (excludes from needs_ocr filter)
+        # - ocr_applied set to True (excludes from ocr_recommended filter)
+        response = client.get("/api/documents/pending-ocr")
         assert response.status_code == 200
         doc_ids = [d["id"] for d in response.json()["documents"]]
         assert str(needs_ocr_document.id) not in doc_ids

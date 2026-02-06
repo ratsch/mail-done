@@ -1160,6 +1160,7 @@ class EmailAPIClient:
             "title": doc.get("title"),
             "summary": doc.get("summary"),
             "ai_category": doc.get("ai_category"),
+            "language": doc.get("language"),
             "extraction_quality": doc.get("extraction_quality"),
             # Locations (origins)
             "locations": locations,
@@ -1212,6 +1213,7 @@ class EmailAPIClient:
             "summary": doc.get("summary"),
             "ai_category": doc.get("ai_category"),
             "ai_tags": doc.get("ai_tags"),
+            "language": doc.get("language"),
             "extraction_status": doc.get("extraction_status"),
             "extraction_quality": doc.get("extraction_quality"),
             "extraction_method": doc.get("extraction_method"),

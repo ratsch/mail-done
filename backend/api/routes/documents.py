@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # Response Models (Pydantic)
 # =============================================================================
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 
 
@@ -131,9 +131,9 @@ class OCRPageInfo(BaseModel):
 
 class SubmitOCRRequest(BaseModel):
     """Request model for submitting OCR results."""
-    text: str
+    text: str = Field(..., max_length=10_000_000)
     method: str = "ocr"
-    quality: Optional[float] = None
+    quality: Optional[float] = Field(None, ge=0.0, le=1.0)
     pages: Optional[List[OCRPageInfo]] = None
     force: bool = False
 
@@ -149,12 +149,12 @@ class SubmitOCRResponse(BaseModel):
 
 class UpdateMetadataRequest(BaseModel):
     """Request model for updating document metadata."""
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    document_type: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=500)
+    summary: Optional[str] = Field(None, max_length=1000)
+    document_type: Optional[str] = Field(None, max_length=100)
     document_date: Optional[date] = None
-    language: Optional[str] = None
-    ai_category: Optional[str] = None
+    language: Optional[str] = Field(None, max_length=10)
+    ai_category: Optional[str] = Field(None, max_length=100)
     ai_tags: Optional[List[str]] = None
 
 
@@ -897,9 +897,14 @@ async def submit_ocr_results(
         force=request.force,
     )
 
-    # Re-read to get updated quality
+    # Update OCR tracking fields and re-read
     if was_updated:
         document = await repo.get_by_id(document_id)
+        document.ocr_applied = True
+        document.ocr_pipeline_version = request.method
+        document.text_source = "ocr"
+        db.commit()
+        db.refresh(document)
 
     return SubmitOCRResponse(
         updated=was_updated,
@@ -936,7 +941,6 @@ async def update_document_metadata(
     for field, value in update_data.items():
         setattr(document, field, value)
 
-    document.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(document)
 
