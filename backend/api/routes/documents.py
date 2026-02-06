@@ -10,7 +10,7 @@ Provides REST API for document indexing feature:
 - Find similar documents (Phase 4)
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -69,6 +69,7 @@ class DocumentResponse(BaseModel):
     summary: Optional[str]
     document_type: Optional[str]
     document_date: Optional[datetime]
+    language: Optional[str]
     ai_category: Optional[str]
     ai_tags: Optional[List[str]]
     first_seen_at: Optional[datetime]
@@ -116,6 +117,74 @@ class DocumentSearchResponse(BaseModel):
     results: List[DocumentSearchResult]
     total: int
     query: str
+
+
+# =============================================================================
+# Write API Request/Response Models
+# =============================================================================
+
+class OCRPageInfo(BaseModel):
+    """Per-page OCR text."""
+    page: int
+    text: str
+
+
+class SubmitOCRRequest(BaseModel):
+    """Request model for submitting OCR results."""
+    text: str
+    method: str = "ocr"
+    quality: Optional[float] = None
+    pages: Optional[List[OCRPageInfo]] = None
+    force: bool = False
+
+
+class SubmitOCRResponse(BaseModel):
+    """Response model for OCR submission."""
+    updated: bool
+    document_id: UUID
+    extraction_quality: Optional[float]
+    previous_quality: Optional[float]
+    embeddings_queued: bool
+
+
+class UpdateMetadataRequest(BaseModel):
+    """Request model for updating document metadata."""
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    document_type: Optional[str] = None
+    document_date: Optional[date] = None
+    language: Optional[str] = None
+    ai_category: Optional[str] = None
+    ai_tags: Optional[List[str]] = None
+
+
+class PendingOCROriginInfo(BaseModel):
+    """Primary origin info for a pending OCR document."""
+    host: Optional[str]
+    path: Optional[str]
+    filename: Optional[str]
+
+
+class PendingOCRDocumentInfo(BaseModel):
+    """Document info in pending OCR list."""
+    id: UUID
+    original_filename: Optional[str]
+    mime_type: Optional[str]
+    file_size: int
+    page_count: Optional[int]
+    extraction_status: str
+    extraction_quality: Optional[float]
+    has_native_text: Optional[bool]
+    is_image_only: Optional[bool]
+    ocr_recommended: Optional[bool]
+    ocr_applied: Optional[bool]
+    primary_origin: Optional[PendingOCROriginInfo] = None
+
+
+class PendingOCRResponse(BaseModel):
+    """Response model for pending OCR list."""
+    documents: List[PendingOCRDocumentInfo]
+    total: int
 
 
 # =============================================================================
@@ -529,6 +598,99 @@ async def list_indexed_folder(
 
 
 # =============================================================================
+# Write API Endpoints - pending-ocr MUST come before /{document_id} route
+# =============================================================================
+
+@router.get("/pending-ocr", response_model=PendingOCRResponse, dependencies=[Depends(verify_api_key)])
+async def list_pending_ocr(
+    limit: int = Query(50, ge=1, le=200, description="Maximum documents to return"),
+    mime_type: Optional[str] = Query(None, description="Filter by MIME type (e.g. application/pdf)"),
+    include_needs_ocr_status: bool = Query(True, description="Include documents with extraction_status=needs_ocr"),
+    include_ocr_recommended: bool = Query(True, description="Include documents with ocr_recommended=true and ocr_applied=false"),
+    db: Session = Depends(get_db)
+):
+    """
+    List documents that need OCR processing.
+
+    Returns documents matching either/both criteria:
+    - extraction_status = 'needs_ocr' (no usable text at all)
+    - ocr_recommended = true AND ocr_applied = false (has some text, OCR would improve)
+
+    Ordered by priority: needs_ocr first, then smallest files first.
+    Includes primary origin info for file retrieval.
+    """
+    from sqlalchemy import or_, case
+
+    if not include_needs_ocr_status and not include_ocr_recommended:
+        return PendingOCRResponse(documents=[], total=0)
+
+    conditions = []
+    if include_needs_ocr_status:
+        conditions.append(Document.extraction_status == ExtractionStatus.NEEDS_OCR.value)
+    if include_ocr_recommended:
+        conditions.append(
+            (Document.ocr_recommended == True) & (Document.ocr_applied == False)
+        )
+
+    query = db.query(Document).filter(
+        Document.is_deleted == False,
+        or_(*conditions),
+    )
+
+    if mime_type:
+        query = query.filter(Document.mime_type == mime_type)
+
+    # Priority ordering: needs_ocr first, then by file size (smallest first)
+    priority = case(
+        (Document.extraction_status == ExtractionStatus.NEEDS_OCR.value, 0),
+        else_=1,
+    )
+    query = query.order_by(priority, Document.file_size.asc())
+
+    total = query.count()
+    documents = query.limit(limit).all()
+
+    # Get primary origins for all documents
+    doc_ids = [d.id for d in documents]
+    primary_origins = {}
+    if doc_ids:
+        origins = db.query(DocumentOrigin).filter(
+            DocumentOrigin.document_id.in_(doc_ids),
+            DocumentOrigin.is_primary == True,
+            DocumentOrigin.is_deleted == False,
+        ).all()
+        for o in origins:
+            primary_origins[o.document_id] = o
+
+    result = []
+    for d in documents:
+        origin = primary_origins.get(d.id)
+        origin_info = None
+        if origin:
+            origin_info = PendingOCROriginInfo(
+                host=origin.origin_host,
+                path=origin.origin_path,
+                filename=origin.origin_filename,
+            )
+        result.append(PendingOCRDocumentInfo(
+            id=d.id,
+            original_filename=d.original_filename,
+            mime_type=d.mime_type,
+            file_size=d.file_size,
+            page_count=d.page_count,
+            extraction_status=d.extraction_status,
+            extraction_quality=d.extraction_quality,
+            has_native_text=d.has_native_text,
+            is_image_only=d.is_image_only,
+            ocr_recommended=d.ocr_recommended,
+            ocr_applied=d.ocr_applied,
+            primary_origin=origin_info,
+        ))
+
+    return PendingOCRResponse(documents=result, total=total)
+
+
+# =============================================================================
 # Document by ID Endpoints - MUST come after search/status/folders routes
 # =============================================================================
 
@@ -693,6 +855,92 @@ async def verify_document_origins(
         "document_id": str(document_id),
         "origins": results,
     }
+
+
+@router.post("/{document_id}/ocr", response_model=SubmitOCRResponse, dependencies=[Depends(verify_api_key)])
+async def submit_ocr_results(
+    document_id: UUID,
+    request: SubmitOCRRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Submit OCR-extracted text for a document.
+
+    Uses quality comparison to decide whether to update:
+    - If existing extraction is empty/short (<100 chars), OCR wins
+    - If force=True, OCR always wins
+    - Otherwise, compares quality scores (higher wins)
+
+    Automatically queues embedding regeneration on update.
+    """
+    from backend.core.documents.processor import DocumentProcessor
+
+    repo = DocumentRepository(db)
+    document = await repo.get_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    previous_quality = document.extraction_quality
+
+    # Convert pages to the structure format expected by processor
+    ocr_structure = None
+    if request.pages:
+        ocr_structure = [{"page": p.page, "text": p.text} for p in request.pages]
+
+    processor = DocumentProcessor(repo)
+    was_updated, embeddings_queued = await processor.provide_ocr_text(
+        document_id=document_id,
+        ocr_text=request.text,
+        ocr_method=request.method,
+        ocr_quality=request.quality,
+        ocr_structure=ocr_structure,
+        force=request.force,
+    )
+
+    # Re-read to get updated quality
+    if was_updated:
+        document = await repo.get_by_id(document_id)
+
+    return SubmitOCRResponse(
+        updated=was_updated,
+        document_id=document_id,
+        extraction_quality=document.extraction_quality,
+        previous_quality=previous_quality,
+        embeddings_queued=embeddings_queued,
+    )
+
+
+@router.patch("/{document_id}/metadata", response_model=DocumentResponse, dependencies=[Depends(verify_api_key)])
+async def update_document_metadata(
+    document_id: UUID,
+    request: UpdateMetadataRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update AI-generated metadata for a document.
+
+    Only updates fields that are explicitly provided (exclude_unset).
+    Useful for enriching documents with AI-generated titles, summaries,
+    categories, tags, and other metadata.
+    """
+    repo = DocumentRepository(db)
+    document = await repo.get_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Only update fields that were explicitly set in the request
+    update_data = request.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields provided for update")
+
+    for field, value in update_data.items():
+        setattr(document, field, value)
+
+    document.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(document)
+
+    return DocumentResponse.model_validate(document)
 
 
 @router.get("/{document_id}/similar", response_model=DocumentSearchResponse, dependencies=[Depends(verify_api_key)])
