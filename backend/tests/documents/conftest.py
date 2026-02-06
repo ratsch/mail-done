@@ -21,9 +21,8 @@ if not os.getenv("DB_ENCRYPTION_KEY"):
     os.environ["DB_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
 import pytest
-from unittest.mock import patch
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, Text, JSON, event
+from sqlalchemy import create_engine, JSON, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.dialects.postgresql import ARRAY

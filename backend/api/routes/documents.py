@@ -10,7 +10,7 @@ Provides REST API for document indexing feature:
 - Find similar documents (Phase 4)
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -132,7 +132,7 @@ class OCRPageInfo(BaseModel):
 class SubmitOCRRequest(BaseModel):
     """Request model for submitting OCR results."""
     text: str = Field(..., max_length=10_000_000)
-    method: str = "ocr"
+    method: str = Field("ocr", max_length=50)
     quality: Optional[float] = Field(None, ge=0.0, le=1.0)
     pages: Optional[List[OCRPageInfo]] = None
     force: bool = False
@@ -897,11 +897,9 @@ async def submit_ocr_results(
         force=request.force,
     )
 
-    # Update OCR tracking fields and re-read
+    # Update OCR tracking fields
     if was_updated:
-        document = await repo.get_by_id(document_id)
         document.ocr_applied = True
-        document.ocr_pipeline_version = request.method
         document.text_source = "ocr"
         db.commit()
         db.refresh(document)

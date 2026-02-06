@@ -5,8 +5,6 @@ Comprehensive tests for Document Write API endpoints:
 - PATCH /api/documents/{document_id}/metadata
 """
 import uuid
-from datetime import date
-from unittest.mock import patch, AsyncMock
 
 import pytest
 
@@ -483,7 +481,6 @@ class TestSubmitOCR:
 
         test_db.refresh(needs_ocr_document)
         assert needs_ocr_document.ocr_applied is True
-        assert needs_ocr_document.ocr_pipeline_version == "ocr_claude"
         assert needs_ocr_document.text_source == "ocr"
 
     def test_submit_ocr_rejected_does_not_set_ocr_applied(
