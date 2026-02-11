@@ -151,7 +151,7 @@ def extract_docx(data: bytes) -> str:
 def extract_xlsx(data: bytes) -> str:
     """Extract text from Excel."""
     import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     text_parts = []
     for sheet in wb.worksheets:
         for row in sheet.iter_rows():
@@ -167,7 +167,7 @@ def extract_xlsx_sheets(data: bytes) -> list:
         List of dicts: [{"sheet": "Sheet1", "sheet_index": 0, "text": "..."}, ...]
     """
     import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     sheets = []
     for idx, sheet in enumerate(wb.worksheets):
         rows = []

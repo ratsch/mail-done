@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 
-from sqlalchemy import select, update, and_, or_
+from sqlalchemy import delete, select, update, and_, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -334,6 +334,41 @@ class DocumentRepository:
             document.text_source = text_source
 
         logger.debug(f"Updated content analysis for document {document_id}")
+        return document
+
+    async def update_document_metadata(
+        self,
+        document_id: UUID,
+        title: Optional[str] = None,
+        summary: Optional[str] = None,
+        document_date=None,
+        document_type: Optional[str] = None,
+        language: Optional[str] = None,
+        page_count: Optional[int] = None,
+    ) -> Optional[Document]:
+        """
+        Update plaintext metadata fields on a document.
+
+        Only sets fields that are not None.
+        """
+        document = await self.get_by_id(document_id)
+        if not document:
+            return None
+
+        if title is not None:
+            document.title = title
+        if summary is not None:
+            document.summary = summary
+        if document_date is not None:
+            document.document_date = document_date
+        if document_type is not None:
+            document.document_type = document_type
+        if language is not None:
+            document.language = language
+        if page_count is not None:
+            document.page_count = page_count
+
+        logger.debug(f"Updated metadata for document {document_id}")
         return document
 
     async def update_extraction_with_comparison(
@@ -961,6 +996,30 @@ class DocumentRepository:
     async def get_task(self, task_id: UUID) -> Optional[DocumentProcessingQueue]:
         """Get a task by ID."""
         return self.db.get(DocumentProcessingQueue, task_id)
+
+    async def cancel_pending_tasks(
+        self,
+        document_id: UUID,
+        task_type: str,
+    ) -> int:
+        """
+        Cancel (delete) pending tasks of a specific type for a document.
+
+        Used to avoid redundant background processing when work was done inline.
+
+        Returns:
+            Number of tasks cancelled.
+        """
+        stmt = (
+            delete(DocumentProcessingQueue)
+            .where(DocumentProcessingQueue.document_id == document_id)
+            .where(DocumentProcessingQueue.task_type == task_type)
+            .where(DocumentProcessingQueue.status == 'pending')
+        )
+        result = self.db.execute(stmt)
+        if result.rowcount > 0:
+            logger.debug(f"Cancelled {result.rowcount} pending {task_type} tasks for document {document_id}")
+        return result.rowcount
 
     # =========================================================================
     # Embedding Management

@@ -1847,9 +1847,10 @@ class EmailProcessingPipeline:
                         # Get unique message IDs (some emails may share the same Message-ID)
                         # Normalize message IDs consistently (bulk_check_processing_status normalizes them)
                         def normalize_msg_id(msg_id: str) -> str:
-                            """Normalize message ID: ensure angle brackets"""
+                            """Normalize message ID: strip whitespace, ensure angle brackets"""
                             if not msg_id:
                                 return msg_id
+                            msg_id = msg_id.strip()
                             if not msg_id.startswith('<'):
                                 return f'<{msg_id}>'
                             return msg_id
@@ -3488,7 +3489,7 @@ async def main():
                     from backend.core.email.imap_monitor import IMAPMonitor as IMAPMonitorClass
                     imap_timeout = int(os.getenv('IMAP_TIMEOUT', '120'))
                     with IMAPMonitorClass(imap_config, timeout=imap_timeout, safe_move=args.safe_move) as imap:
-                        all_folders = imap.get_folder_list()
+                        all_folders = imap.get_folder_list(exclude_noselect=True)
                     
                     # Filter folders that match the base folder path
                     base_folder = args.folder.rstrip('/')
@@ -3741,19 +3742,19 @@ async def main():
             from backend.core.email.imap_monitor import IMAPMonitor as IMAPMonitorClass
             imap_timeout = int(os.getenv('IMAP_TIMEOUT', '120'))
             with IMAPMonitorClass(imap_config, timeout=imap_timeout, safe_move=args.safe_move) as imap:
-                all_folders = imap.get_folder_list()
-            
+                all_folders = imap.get_folder_list(exclude_noselect=True)
+
             # Filter folders that match the base folder path
             base_folder = args.folder.rstrip('/')
             matching_folders = []
-            
+
             for folder in all_folders:
                 # Exact match or starts with base_folder/
                 if folder == base_folder or folder.startswith(base_folder + '/'):
                     matching_folders.append(folder)
-            
+
             matching_folders.sort()  # Process in alphabetical order
-            
+
             if not matching_folders:
                 print(f"❌ No folders found matching '{args.folder}'")
                 sys.exit(1)

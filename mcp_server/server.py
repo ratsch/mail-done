@@ -982,7 +982,96 @@ Use collection_id with list_applications to filter by collection.""",
                 "properties": {},
                 "required": []
             }
-        )
+        ),
+
+        # ── Time / Date utility tools ──────────────────────────────────
+        Tool(
+            name="get_current_datetime",
+            description="""[UTILITY] Get the current date, time, day of week, and timezone.
+
+Returns precise current time information including:
+- Date and day of week
+- Current time with seconds
+- Timezone name and UTC offset
+- ISO 8601 formatted datetime
+- Unix timestamp
+
+Use this whenever you need to know the current date/time or day of week.
+Default timezone is Europe/Zurich.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone name (e.g., 'Europe/Zurich', 'America/New_York', 'Asia/Tokyo'). Default: Europe/Zurich",
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="convert_timezone",
+            description="""[UTILITY] Convert a time from one timezone to another.
+
+Converts a given time (and optional date) between two timezones.
+Useful for scheduling across time zones.
+
+Examples:
+- "What time is 9am Zurich in New York?"
+- "Convert 14:30 Tokyo time to London"
+- "When is 8:30 EST in CET?" """,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "time": {
+                        "type": "string",
+                        "description": "Time in HH:MM or HH:MM:SS format (e.g., '09:00', '14:30:00')",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date in YYYY-MM-DD format (default: today)",
+                    },
+                    "from_timezone": {
+                        "type": "string",
+                        "description": "Source IANA timezone (e.g., 'Europe/Zurich')",
+                    },
+                    "to_timezone": {
+                        "type": "string",
+                        "description": "Target IANA timezone (e.g., 'America/New_York')",
+                    },
+                },
+                "required": ["time", "from_timezone", "to_timezone"]
+            }
+        ),
+        Tool(
+            name="get_date_info",
+            description="""[UTILITY] Get day of week, week number, and relative info for any date.
+
+Given a date, returns:
+- Day of week (Monday, Tuesday, ...)
+- ISO week number and day of year
+- Whether it's today, tomorrow, or yesterday
+- How many days from today and a human-readable relative description
+
+Examples:
+- "What day of the week is February 14?"
+- "Is March 1 a weekday?"
+- "How many days until December 25?" """,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Date in YYYY-MM-DD format",
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "description": "Timezone for 'today' reference (default: Europe/Zurich)",
+                    },
+                },
+                "required": ["date"]
+            }
+        ),
     ]
 
     # Add email attachment tools if enabled
@@ -1309,6 +1398,113 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
 
             elif name == "get_application_collections":
                 result = await client.get_application_collections()
+
+            # ── Time / Date utility handlers (no backend API needed) ───
+            elif name == "get_current_datetime":
+                from zoneinfo import ZoneInfo
+                tz_name = arguments.get("timezone", "Europe/Zurich")
+                try:
+                    tz = ZoneInfo(tz_name)
+                except KeyError:
+                    result = {"error": f"Unknown timezone: {tz_name}"}
+                else:
+                    now = datetime.now(tz)
+                    result = {
+                        "date": now.strftime("%Y-%m-%d"),
+                        "day_of_week": now.strftime("%A"),
+                        "time": now.strftime("%H:%M:%S"),
+                        "timezone": tz_name,
+                        "utc_offset": now.strftime("%z")[:3] + ":" + now.strftime("%z")[3:],
+                        "iso8601": now.isoformat(),
+                        "unix_timestamp": int(now.timestamp()),
+                    }
+
+            elif name == "convert_timezone":
+                from zoneinfo import ZoneInfo
+                time_str = arguments["time"]
+                from_tz_name = arguments["from_timezone"]
+                to_tz_name = arguments["to_timezone"]
+                date_str = arguments.get("date")
+                try:
+                    from_tz = ZoneInfo(from_tz_name)
+                    to_tz = ZoneInfo(to_tz_name)
+                except KeyError as e:
+                    result = {"error": f"Unknown timezone: {e}"}
+                else:
+                    try:
+                        # Parse time
+                        parts = time_str.split(":")
+                        hour, minute = int(parts[0]), int(parts[1])
+                        second = int(parts[2]) if len(parts) > 2 else 0
+                        # Parse date (default: today in source timezone)
+                        if date_str:
+                            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        else:
+                            d = datetime.now(from_tz).date()
+                        # Build aware datetime and convert
+                        dt_from = datetime(d.year, d.month, d.day, hour, minute, second, tzinfo=from_tz)
+                        dt_to = dt_from.astimezone(to_tz)
+                        # Offset difference (use abs to avoid floor-division sign bug)
+                        diff_seconds = dt_to.utcoffset().total_seconds() - dt_from.utcoffset().total_seconds()
+                        sign = "+" if diff_seconds >= 0 else "-"
+                        abs_diff = abs(diff_seconds)
+                        diff_hours = int(abs_diff // 3600)
+                        diff_mins = int(abs_diff % 3600 // 60)
+                        result = {
+                            "input": {
+                                "date": dt_from.strftime("%Y-%m-%d"),
+                                "time": dt_from.strftime("%H:%M:%S"),
+                                "timezone": from_tz_name,
+                                "day_of_week": dt_from.strftime("%A"),
+                            },
+                            "output": {
+                                "date": dt_to.strftime("%Y-%m-%d"),
+                                "time": dt_to.strftime("%H:%M:%S"),
+                                "timezone": to_tz_name,
+                                "day_of_week": dt_to.strftime("%A"),
+                            },
+                            "utc_offset_difference": f"{sign}{abs(diff_hours)}:{diff_mins:02d}",
+                        }
+                    except (ValueError, IndexError) as e:
+                        result = {"error": f"Invalid time/date format: {e}"}
+
+            elif name == "get_date_info":
+                from zoneinfo import ZoneInfo
+                date_str = arguments["date"]
+                tz_name = arguments.get("timezone", "Europe/Zurich")
+                try:
+                    tz = ZoneInfo(tz_name)
+                except KeyError:
+                    result = {"error": f"Unknown timezone: {tz_name}"}
+                else:
+                    try:
+                        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        today = datetime.now(tz).date()
+                        delta = (target - today).days
+                        # Relative description
+                        if delta == 0:
+                            relative = "today"
+                        elif delta == 1:
+                            relative = "tomorrow"
+                        elif delta == -1:
+                            relative = "yesterday"
+                        elif delta > 0:
+                            relative = f"in {delta} days"
+                        else:
+                            relative = f"{abs(delta)} days ago"
+                        result = {
+                            "date": date_str,
+                            "day_of_week": target.strftime("%A"),
+                            "week_number": target.isocalendar()[1],
+                            "day_of_year": target.timetuple().tm_yday,
+                            "is_today": delta == 0,
+                            "is_tomorrow": delta == 1,
+                            "is_yesterday": delta == -1,
+                            "days_from_today": delta,
+                            "relative": relative,
+                        }
+                    except ValueError as e:
+                        result = {"error": f"Invalid date format: {e}"}
 
             else:
                 result = {"error": f"Unknown tool: {name}"}

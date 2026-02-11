@@ -65,6 +65,10 @@ class DocumentResponse(BaseModel):
     extraction_status: str
     extraction_quality: Optional[float]
     extraction_method: Optional[str]
+    extraction_version: Optional[str] = None
+    text_source: Optional[str] = None
+    ocr_applied: Optional[bool] = None
+    ocr_pipeline_version: Optional[str] = None
     title: Optional[str]
     summary: Optional[str]
     document_type: Optional[str]

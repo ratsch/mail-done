@@ -29,6 +29,44 @@ from backend.core.documents.repository import DocumentRepository
 
 logger = logging.getLogger(__name__)
 
+# Extensions that support OCR sidecar files
+OCR_SIDECAR_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
+
+
+def _load_ocr_sidecar(file_path: Path) -> tuple[Optional[dict], Optional[float]]:
+    """Check for .ocr.json sidecar file and load it.
+
+    Returns:
+        Tuple of (sidecar_data, sidecar_mtime) or (None, None) if not found.
+    """
+    sidecar_path = file_path.parent / (file_path.name + ".ocr.json")
+    if not sidecar_path.exists():
+        return None, None
+    try:
+        sidecar_mtime = sidecar_path.stat().st_mtime
+        with open(sidecar_path) as f:
+            data = json.load(f)
+        logger.debug(f"Loaded OCR sidecar: {sidecar_path} (mtime={sidecar_mtime})")
+        return data, sidecar_mtime
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        logger.warning(f"Failed to load OCR sidecar {sidecar_path}: {e}")
+        return None, None
+
+
+def _get_stored_sidecar_mtime(document: "Document") -> Optional[float]:
+    """Get the stored OCR sidecar mtime from a document's extraction_structure."""
+    structure = document.extraction_structure
+    if not structure or not isinstance(structure, dict):
+        return None
+    return structure.get("ocr_sidecar_mtime")
+
+
+def _ocr_quality_to_float(quality: str) -> float:
+    """Map OCR quality string to numeric score."""
+    return {"high": 0.95, "medium": 0.70, "low": 0.40}.get(
+        str(quality).lower(), 0.70
+    )
+
 
 @dataclass
 class FileInfo:
@@ -50,9 +88,11 @@ class ScanResult:
     total_files_found: int = 0
     files_processed: int = 0
     new_documents: int = 0
+    updated_documents: int = 0
     duplicate_documents: int = 0
     reindexed: int = 0
     texts_extracted: int = 0
+    ocr_sidecars_applied: int = 0
     embeddings_generated: int = 0
     skipped_unchanged: int = 0
     skipped_too_large: int = 0
@@ -66,27 +106,39 @@ class ScanResult:
         self.errors += 1
         self.error_details.append({"path": path, "error": error})
 
+    def progress_summary(self, total_to_process: int, elapsed_seconds: float) -> str:
+        """Return a compact progress line."""
+        remaining = total_to_process - self.files_processed
+        rate = self.files_processed / elapsed_seconds if elapsed_seconds > 0 else 0
+        eta = remaining / rate if rate > 0 else 0
+        return (
+            f"[{self.files_processed}/{total_to_process}] "
+            f"{self.new_documents} new, {self.updated_documents} updated, "
+            f"{self.ocr_sidecars_applied} OCR sidecars, {self.errors} errors "
+            f"({rate:.1f} files/s, ~{eta:.0f}s remaining)"
+        )
+
     def summary(self) -> str:
         """Return a human-readable summary."""
         lines = [
             f"Scan complete:",
-            f"  Files found: {self.total_files_found}",
-            f"  Processed: {self.files_processed}",
-            f"  New documents: {self.new_documents}",
-            f"  Duplicates: {self.duplicate_documents}",
+            f"  Files found:          {self.total_files_found}",
+            f"  Processed:            {self.files_processed}",
+            f"  New documents:        {self.new_documents}",
+            f"  Updated documents:    {self.updated_documents}",
+            f"  Already known:        {self.duplicate_documents}",
+            f"  OCR sidecars applied: {self.ocr_sidecars_applied}",
+            f"  Texts extracted:      {self.texts_extracted}",
+            f"  Embeddings generated: {self.embeddings_generated}",
         ]
         if self.reindexed > 0:
-            lines.append(f"  Reindexed: {self.reindexed}")
-        if self.texts_extracted > 0:
-            lines.append(f"  Texts extracted: {self.texts_extracted}")
-        if self.embeddings_generated > 0:
-            lines.append(f"  Embeddings generated: {self.embeddings_generated}")
+            lines.append(f"  Reindexed:            {self.reindexed}")
         lines.extend([
-            f"  Skipped (unchanged): {self.skipped_unchanged}",
-            f"  Skipped (too large): {self.skipped_too_large}",
-            f"  Skipped (excluded): {self.skipped_excluded}",
-            f"  Errors: {self.errors}",
-            f"  Duration: {self.scan_duration_seconds:.1f}s",
+            f"  Skipped (unchanged):  {self.skipped_unchanged}",
+            f"  Skipped (too large):  {self.skipped_too_large}",
+            f"  Skipped (excluded):   {self.skipped_excluded}",
+            f"  Errors:               {self.errors}",
+            f"  Duration:             {self.scan_duration_seconds:.1f}s",
         ])
         return "\n".join(lines)
 
@@ -222,6 +274,129 @@ class FolderScanner:
         self.cache = cache
         self.embedding_service = embedding_service
 
+    async def _apply_ocr_sidecar(
+        self,
+        document: Document,
+        sidecar: dict,
+        sidecar_mtime: float,
+        result: "ScanResult",
+        filename: str,
+    ) -> bool:
+        """
+        Apply OCR sidecar data to a document.
+
+        Updates content analysis, provides OCR text, sets ocr_applied flag,
+        stores sidecar mtime for change detection, updates metadata,
+        and generates embeddings.
+
+        Returns:
+            True if sidecar was successfully applied.
+        """
+        repo = self.processor.repository
+        doc_id = document.id
+
+        # 1. Build OCR text from pages (validate early, before modifying DB)
+        pages = sidecar.get("pages", [])
+        if not pages:
+            logger.warning(f"OCR sidecar for {filename} has no pages")
+            return False
+
+        full_text = "\n\n".join(p.get("text", "") for p in pages)
+        if not full_text.strip():
+            logger.warning(f"OCR sidecar for {filename} has empty text")
+            return False
+
+        ocr_structure = [
+            {"page": p.get("page", i + 1), "text": p.get("text", "")}
+            for i, p in enumerate(pages)
+        ]
+
+        ocr_method = sidecar.get("ocr_method", "external_ocr")
+        ocr_quality = _ocr_quality_to_float(sidecar.get("ocr_quality", "medium"))
+
+        # 2. Content analysis from sidecar
+        await repo.update_content_analysis(
+            document_id=doc_id,
+            has_images=sidecar.get("has_images"),
+            has_native_text=sidecar.get("has_native_text"),
+            is_image_only=sidecar.get("is_image_only"),
+            is_scanned_with_ocr=sidecar.get("is_scanned_with_ocr"),
+            ocr_recommended=False,  # OCR is being applied now
+            text_source="ocr",
+        )
+
+        # 3. Provide OCR text (handles quality comparison, encryption, status)
+        # Note: this also queues a regenerate_embedding task as a side effect
+        was_updated, embeddings_queued = await self.processor.provide_ocr_text(
+            document_id=doc_id,
+            ocr_text=full_text,
+            ocr_method=ocr_method,
+            ocr_quality=ocr_quality,
+            ocr_structure=ocr_structure,
+            force=True,
+        )
+
+        if not was_updated:
+            logger.debug(f"OCR sidecar for {filename}: text not updated (quality check)")
+            return False
+
+        # 4. Set ocr_applied flag + pipeline version + store sidecar mtime
+        #    provide_ocr_text does NOT set ocr_applied — we must do it here.
+        #    Use dict() copy so SQLAlchemy detects the JSON mutation on plain Column(JSON).
+        doc_updated = await repo.get_by_id(doc_id)
+        if doc_updated:
+            doc_updated.ocr_applied = True
+            version = sidecar.get("ocr_version") or "v1.0"
+            doc_updated.ocr_pipeline_version = version
+            doc_updated.extraction_version = version
+            # Store sidecar mtime in extraction_structure for change detection
+            structure = dict(doc_updated.extraction_structure or {})
+            structure["ocr_sidecar_mtime"] = sidecar_mtime
+            doc_updated.extraction_structure = structure
+
+        # 5. Metadata
+        from datetime import date as date_type
+        doc_date = None
+        raw_date = sidecar.get("document_date")
+        if raw_date:
+            try:
+                doc_date = date_type.fromisoformat(raw_date)
+            except (ValueError, TypeError):
+                pass
+
+        await repo.update_document_metadata(
+            document_id=doc_id,
+            title=sidecar.get("document_title"),
+            summary=sidecar.get("summary"),
+            document_date=doc_date,
+            document_type=sidecar.get("document_type"),
+            language=sidecar.get("language"),
+            page_count=sidecar.get("num_pages"),
+        )
+
+        # 6. Generate embeddings inline (if service available)
+        #    provide_ocr_text queued a regenerate_embedding task; if we generate
+        #    inline, cancel that task to avoid redundant double-generation.
+        if self.embedding_service:
+            try:
+                doc_for_embed = await repo.get_by_id(doc_id)
+                if doc_for_embed:
+                    embed_result = await self.embedding_service.generate_document_embedding(
+                        doc_for_embed,
+                        single_embedding=self.embedding_service.single_embedding,
+                    )
+                    result.embeddings_generated += embed_result.embeddings_created
+                    logger.info(f"Generated {embed_result.embeddings_created} embeddings for {filename} (from OCR sidecar)")
+                    # Cancel the queued regenerate_embedding task since we just did it inline
+                    await repo.cancel_pending_tasks(doc_id, "regenerate_embedding")
+            except Exception as e:
+                logger.warning(f"Embedding generation failed for {filename}: {e}")
+                # Leave the queued task — background processor will retry
+
+        result.ocr_sidecars_applied += 1
+        logger.info(f"Applied OCR sidecar for {filename}: {len(pages)} pages, quality={ocr_quality}")
+        return True
+
     def discover_files(
         self,
         config: FolderScanConfig,
@@ -333,6 +508,8 @@ class FolderScanner:
         progress_callback: Optional[callable] = None,
         reindex: bool = False,
         commit_interval: int = 50,
+        skip_ocr_sidecars: bool = False,
+        progress_interval: int = 20,
     ) -> ScanResult:
         """
         Scan a folder and register discovered documents.
@@ -345,6 +522,8 @@ class FolderScanner:
             progress_callback: Optional callback(file_info, result) for progress
             reindex: If True, re-extract text and regenerate embeddings for existing documents
             commit_interval: Commit to database every N files (default: 50). Set to 0 to disable.
+            skip_ocr_sidecars: If True, ignore .ocr.json sidecar files (default: False)
+            progress_interval: Log progress summary every N processed files (default: 20)
 
         Returns:
             ScanResult with scan statistics
@@ -357,23 +536,31 @@ class FolderScanner:
         files_since_commit = 0
         reindexed_document_ids = set()  # Track already reindexed documents to avoid duplicates
 
+        # Collect files to process (enables total count for progress reporting)
+        logger.info("Discovering files...")
+        all_files = []
         for file_info in self.discover_files(config):
             result.total_files_found += 1
+            if limit and len(all_files) >= limit:
+                continue  # keep counting total but stop collecting
 
-            # Check limit
-            if limit and processed_count >= limit:
-                break
-
-            # Check if file changed (incremental scan) - skip check if reindexing
             if not reindex and self.cache and not self.cache.should_process(file_info):
                 result.skipped_unchanged += 1
                 continue
 
-            # Check file size (double-check, discover_files should filter these)
             if file_info.size > config.effective_max_file_size_bytes:
                 result.skipped_too_large += 1
                 continue
 
+            all_files.append(file_info)
+
+        total_to_process = len(all_files)
+        logger.info(
+            f"Found {result.total_files_found} files, {total_to_process} to process "
+            f"({result.skipped_unchanged} unchanged, {result.skipped_too_large} too large)"
+        )
+
+        for file_info in all_files:
             # Progress callback
             if progress_callback:
                 progress_callback(file_info, result)
@@ -406,8 +593,30 @@ class FolderScanner:
                 if is_new:
                     result.new_documents += 1
 
-                    # Extract text if enabled
-                    if extract_text:
+                    # Check for OCR sidecar file
+                    sidecar_applied = False
+                    if not skip_ocr_sidecars and file_info.extension in OCR_SIDECAR_EXTENSIONS:
+                        sidecar, sidecar_mtime = _load_ocr_sidecar(file_info.path)
+                        if sidecar:
+                            try:
+                                sidecar_applied = await self._apply_ocr_sidecar(
+                                    document, sidecar, sidecar_mtime, result, file_info.path.name,
+                                )
+                                if sidecar_applied:
+                                    # Cancel the extract_text task queued by handle_file_change —
+                                    # OCR sidecar already provided the text, no need for native extraction.
+                                    await self.processor.repository.cancel_pending_tasks(
+                                        document.id, "extract_text"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"OCR sidecar failed for {file_info.path.name}: {e}")
+                                try:
+                                    self.processor.repository.db.rollback()
+                                except Exception:
+                                    pass
+
+                    # Fall back to normal extraction if no sidecar or sidecar failed
+                    if not sidecar_applied and extract_text:
                         try:
                             with open(file_info.path, 'rb') as f:
                                 file_content = f.read()
@@ -509,9 +718,44 @@ class FolderScanner:
                 else:
                     result.duplicate_documents += 1
 
+                    # Check for OCR sidecar on existing documents:
+                    # - Apply if OCR hasn't been applied yet
+                    # - Re-apply if the sidecar file is newer than the stored version
+                    if not skip_ocr_sidecars and file_info.extension in OCR_SIDECAR_EXTENSIONS:
+                        sidecar, sidecar_mtime = _load_ocr_sidecar(file_info.path)
+                        if sidecar:
+                            stored_mtime = _get_stored_sidecar_mtime(document)
+                            should_apply = (
+                                not document.ocr_applied
+                                or stored_mtime is None
+                                or sidecar_mtime > stored_mtime
+                            )
+                            if should_apply:
+                                if stored_mtime and sidecar_mtime > stored_mtime:
+                                    logger.info(f"OCR sidecar updated for {file_info.path.name} (new mtime)")
+                                try:
+                                    applied = await self._apply_ocr_sidecar(
+                                        document, sidecar, sidecar_mtime, result, file_info.path.name,
+                                    )
+                                    if applied:
+                                        result.updated_documents += 1
+                                except Exception as e:
+                                    logger.warning(f"OCR sidecar failed for existing {file_info.path.name}: {e}")
+                                    try:
+                                        self.processor.repository.db.rollback()
+                                    except Exception:
+                                        pass
+                            elif document.ocr_applied and stored_mtime and sidecar_mtime != stored_mtime:
+                                # Different sidecar at a duplicate file location — log but don't overwrite
+                                logger.warning(
+                                    f"Duplicate file {file_info.path.name} has different OCR sidecar "
+                                    f"than already applied (mtime {sidecar_mtime} vs stored {stored_mtime}), skipping"
+                                )
+
                     # Reindex existing document if requested (skip if already reindexed this session)
                     if reindex and extract_text and document.id not in reindexed_document_ids:
                         result.reindexed += 1
+                        result.updated_documents += 1
                         try:
                             with open(file_info.path, 'rb') as f:
                                 file_content = f.read()
@@ -588,6 +832,14 @@ class FolderScanner:
                 result.files_processed += 1
                 processed_count += 1
                 files_since_commit += 1
+
+                # Periodic progress summary (after first file, then every N files)
+                if progress_interval > 0 and (
+                    result.files_processed == 1
+                    or result.files_processed % progress_interval == 0
+                ):
+                    elapsed = time.time() - start_time
+                    logger.info(result.progress_summary(total_to_process, elapsed))
 
                 # Batch commit to make progress visible and recoverable
                 if not dry_run and commit_interval > 0 and files_since_commit >= commit_interval:
@@ -686,7 +938,7 @@ def create_scanner(
     repository: DocumentRepository,
     cache_dir: Optional[Path] = None,
     generate_embeddings: bool = True,
-    single_embedding: bool = True,
+    single_embedding: bool = False,
 ) -> FolderScanner:
     """
     Create a folder scanner with appropriate cache.
@@ -695,7 +947,7 @@ def create_scanner(
         repository: Document repository
         cache_dir: Directory for scan caches (default: .scan_cache in cwd)
         generate_embeddings: Whether to generate embeddings inline (default: True)
-        single_embedding: If True, generate only one embedding per document (default: True)
+        single_embedding: If True, generate only one embedding per document (default: False)
                          If False, generate per-page/per-sheet embeddings for multi-page docs
 
     Returns:

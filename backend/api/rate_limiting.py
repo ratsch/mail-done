@@ -38,7 +38,10 @@ class APIRateLimiter:
 
         # Security: Track suspicious patterns
         self.failed_auth_attempts: Dict[str, list] = defaultdict(list)  # ip -> [timestamps]
-        self.MAX_FAILED_ATTEMPTS = 10  # per hour
+        self.MAX_FAILED_ATTEMPTS = 50  # per hour (was 10, too low for same-host frontend)
+
+        # IPs exempt from failed-auth blocking (trusted same-host services)
+        self.TRUSTED_IPS = {"127.0.0.1", "::1"}
 
         logger.info(f"Rate limiter initialized: {self.IP_RATE_LIMIT} req/min per IP, {self.KEY_RATE_LIMIT} req/min per key, {self.SHARED_RATE_LIMIT} req/min for /shared/")
     
@@ -67,7 +70,8 @@ class APIRateLimiter:
         """
         with self.lock:
             # Check for IP-based blocking (failed auth)
-            if ip in self.failed_auth_attempts:
+            # Skip for trusted IPs (same-host services like the app frontend)
+            if ip not in self.TRUSTED_IPS and ip in self.failed_auth_attempts:
                 recent_failures = [
                     ts for ts in self.failed_auth_attempts[ip]
                     if time.time() - ts < 3600  # Last hour

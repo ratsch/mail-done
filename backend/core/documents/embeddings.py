@@ -30,10 +30,10 @@ TOKEN_LIMIT = 8192  # Model's max context length
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIMENSIONS = 3072
 MAX_TOKENS_PER_CHUNK = 8000  # Safe limit for embedding model
-# Conservative estimate: 2.5 chars/token handles structured data (spreadsheets, tables)
-# which have shorter tokens than prose. This prevents "max tokens exceeded" errors.
-CHARS_PER_TOKEN_ESTIMATE = 2.5
-MAX_CHARS_PER_CHUNK = int(MAX_TOKENS_PER_CHUNK * CHARS_PER_TOKEN_ESTIMATE)  # ~20000 chars
+# Conservative estimate: 2.0 chars/token handles structured data (spreadsheets, tables,
+# OCR output) which have shorter tokens than prose. This prevents "max tokens exceeded" errors.
+CHARS_PER_TOKEN_ESTIMATE = 2.0
+MAX_CHARS_PER_CHUNK = int(MAX_TOKENS_PER_CHUNK * CHARS_PER_TOKEN_ESTIMATE)  # ~16000 chars
 
 
 @dataclass

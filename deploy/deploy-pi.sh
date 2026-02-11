@@ -184,7 +184,7 @@ build_and_start() {
     set +a
 
     # Build using podman-compose (this works fine)
-    podman-compose -f "$COMPOSE_FILE" build
+    podman-compose -f "$COMPOSE_FILE" build --no-cache
 
     # Start services using direct podman commands
     # (podman-compose has a bug with host networking where it adds --net default)

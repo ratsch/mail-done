@@ -882,13 +882,20 @@ class IMAPMonitor:
         
         return False
     
-    def get_folder_list(self) -> List[str]:
-        """Get list of all folders"""
+    def get_folder_list(self, exclude_noselect: bool = False) -> List[str]:
+        """Get list of all folders.
+
+        Args:
+            exclude_noselect: If True, exclude folders with \\Noselect flag
+                (container-only folders that cannot hold messages).
+        """
         if not self.client:
             self.connect()
-        
+
         try:
             folders = self.client.list_folders()
+            if exclude_noselect:
+                return [f[2] for f in folders if b'\\Noselect' not in f[0]]
             return [folder[2] for folder in folders]
         except Exception as e:
             logger.error(f"Failed to get folder list: {e}")

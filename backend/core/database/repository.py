@@ -287,12 +287,15 @@ class EmailRepository:
             is_new is True if email was just created, False if already existed
         """
         try:
+            # Normalize message_id: strip whitespace (IMAP headers sometimes include leading spaces)
+            clean_message_id = processed_email.message_id.strip() if processed_email.message_id else processed_email.message_id
+
             # Try to find existing by message_id and account_id
             email = self.db.query(Email).filter(
-                Email.message_id == processed_email.message_id,
+                Email.message_id == clean_message_id,
                 Email.account_id == account_id
             ).first()
-            
+
             if email:
                 # Detect folder change and track it
                 old_folder = email.folder
@@ -323,7 +326,7 @@ class EmailRepository:
             
             # Create new (sanitize text fields to remove NUL bytes and enforce length limits)
             email = Email(
-                message_id=processed_email.message_id,
+                message_id=clean_message_id,
                 uid=sanitize_for_postgres(processed_email.uid, max_length=100),
                 folder=sanitize_for_postgres(processed_email.folder, max_length=200),
                 account_id=account_id,  # NEW: Multi-account support
@@ -966,14 +969,16 @@ class EmailRepository:
             # Import here to avoid circular imports
             from .models import EmailEmbedding
             
-            # Normalize message IDs: add angle brackets if missing (database stores them with brackets)
+            # Normalize message IDs: strip whitespace, add angle brackets if missing
+            # (database may store them with leading spaces from IMAP headers)
             normalized_ids = []
             original_to_normalized = {}
             for msg_id in message_ids:
-                if not msg_id.startswith('<'):
-                    normalized = f'<{msg_id}>'
+                stripped = msg_id.strip()
+                if not stripped.startswith('<'):
+                    normalized = f'<{stripped}>'
                 else:
-                    normalized = msg_id
+                    normalized = stripped
                 normalized_ids.append(normalized)
                 original_to_normalized[msg_id] = normalized
             
