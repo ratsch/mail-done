@@ -22,6 +22,7 @@ except ImportError:
 
 # Import models for autogenerate support
 from backend.core.database.models import Base
+import backend.core.database.models_property  # noqa: F401 — register property tables in Base.metadata
 
 # this is the Alembic Config object
 config = context.config
