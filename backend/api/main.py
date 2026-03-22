@@ -15,6 +15,7 @@ from backend.api.auth import verify_api_key
 from backend.api.routes import emails, stats, tracking, replies, search, applemail, costs, debug, attachments, imap, documents
 from backend.api.routes import review_auth, review_applications, review_admin, review_notifications, review_stats, collections
 from backend.api.routes import oauth_handshake, application_shares, review_assignments
+from backend.api.routes import review_listings
 from backend.api.review_middleware import RateLimitMiddleware, AuditLogMiddleware, start_rate_limit_cleanup_thread
 from backend.api.rate_limiting import GeneralRateLimitMiddleware, cleanup_rate_limiter
 from backend.api.auditing import AuditingMiddleware
@@ -44,12 +45,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # Create FastAPI app
+_debug = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="Mail-Done API",
     description="Email Processing System with AI Classification",
     version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url="/docs" if _debug else None,
+    redoc_url="/redoc" if _debug else None,
 )
 
 
@@ -207,7 +210,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,  # From settings
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
         "Content-Type", 
         "X-API-Key", 
@@ -248,6 +251,9 @@ app.include_router(collections.router)  # Application collections
 app.include_router(review_assignments.router)  # Review assignments
 app.include_router(application_shares.router)  # Share token management (authenticated)
 app.include_router(application_shares.public_router)  # Public shared application access
+
+# Property listing routes (real estate portal)
+app.include_router(review_listings.router)
 
 # Security endpoints (status, unlock)
 app.include_router(get_security_router())

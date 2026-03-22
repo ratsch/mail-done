@@ -1,0 +1,161 @@
+# Due Diligence Checklist Template for Property Listings
+#
+# Used by POST /listings/{id}/due-diligence to generate per-listing checklists.
+# Questions are filtered by applicable_scenarios on the listing.
+# Scenarios: A=Klosters, B=Zurich family, C=Zurich co-purchase, D=Investment
+#
+# Priority: critical (must-have before offer), high (should-have), normal (nice-to-have)
+
+categories:
+  - name: grundbuch
+    questions:
+      - question: "Grundbuchauszug angefordert und geprüft?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Dienstbarkeiten / Grundlasten vorhanden?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Baurecht oder Nutzniessung eingetragen?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Vorkaufsrechte bestehend?"
+        priority: high
+        scenarios: [A, B, C, D]
+
+  - name: baurecht_stwe
+    questions:
+      - question: "STWE-Reglement und Hausordnung eingesehen?"
+        priority: critical
+        scenarios: [B, C]
+      - question: "Erneuerungsfonds-Stand und Einzahlungsplan?"
+        priority: critical
+        scenarios: [B, C]
+      - question: "Protokolle der letzten 3 STWE-Versammlungen?"
+        priority: high
+        scenarios: [B, C]
+      - question: "Geplante Sanierungen oder Sonderumlagen?"
+        priority: critical
+        scenarios: [B, C]
+      - question: "Wertquote und Nutzungsrechte geklärt?"
+        priority: high
+        scenarios: [B, C]
+
+  - name: bauliches
+    questions:
+      - question: "Baujahr und letzte Renovation verifiziert?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Heizungssystem und Zustand (Alter, Ersatzbedarf)?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Dach- und Fassadenzustand?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Feuchtigkeits- oder Schimmelprobleme?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Energieausweis (GEAK) vorhanden?"
+        priority: normal
+        scenarios: [A, B, C, D]
+      - question: "Altlasten oder Asbest-Verdacht?"
+        priority: critical
+        scenarios: [A, B, C, D]
+
+  - name: umgebung
+    questions:
+      - question: "Nachbarentwicklung: Bauprojekte in der Umgebung?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Zonenplan geprüft (Bauzone, Nutzung)?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Lärmbelastung (Strasse, Flughafen, Bahn)?"
+        priority: high
+        scenarios: [B, C]
+      - question: "ÖV-Anbindung geprüft?"
+        priority: normal
+        scenarios: [B, C]
+      - question: "Schulen und Einkaufsmöglichkeiten?"
+        priority: normal
+        scenarios: [B, C]
+
+  - name: finanzen
+    questions:
+      - question: "Bankenbewertung / Tragbarkeitsrechnung?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Nebenkosten-Aufstellung (effektiv vs. geschätzt)?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Eigenmittel-Nachweis vorbereitet?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Grundstückgewinnsteuer bei Wiederverkauf kalkuliert?"
+        priority: normal
+        scenarios: [D]
+      - question: "Steuerwert vs. Kaufpreis analysiert?"
+        priority: normal
+        scenarios: [A, B, C, D]
+
+  - name: zweitwohnung
+    questions:
+      - question: "Zweitwohnungsgesetz: Gemeinde-Kontingent geprüft?"
+        priority: critical
+        scenarios: [A]
+      - question: "Nutzungsbeschränkung als Zweitwohnung?"
+        priority: critical
+        scenarios: [A]
+      - question: "Vermietungspflicht oder Eigennutzung?"
+        priority: high
+        scenarios: [A]
+      - question: "Gemeinde-Bewilligung für Handänderung nötig?"
+        priority: high
+        scenarios: [A]
+
+  - name: investment
+    questions:
+      - question: "Mieteinnahmen-Potenzial berechnet (Brutto-/Nettorendite)?"
+        priority: critical
+        scenarios: [D]
+      - question: "Aktuelle Mieterträge und Mietverträge?"
+        priority: critical
+        scenarios: [D]
+      - question: "Leerstandsrisiko in der Gemeinde?"
+        priority: high
+        scenarios: [D]
+      - question: "Sanierungsbedarf und Investitionsplan?"
+        priority: high
+        scenarios: [D]
+      - question: "Steueroptimierung (Liegenschaftsunterhalt, Abschreibung)?"
+        priority: normal
+        scenarios: [D]
+
+  - name: copurchase
+    questions:
+      - question: "Miteigentümer-Vertrag: Nutzungsrechte, Kostenaufteilung?"
+        priority: critical
+        scenarios: [C]
+      - question: "Exit-Klausel bei Ausstieg eines Partners?"
+        priority: critical
+        scenarios: [C]
+      - question: "Vorkaufsrecht unter Miteigentümern?"
+        priority: high
+        scenarios: [C]
+      - question: "Finanzierung und Haftung aufgeteilt?"
+        priority: critical
+        scenarios: [C]
+
+  - name: besichtigung
+    questions:
+      - question: "Besichtigung durchgeführt?"
+        priority: critical
+        scenarios: [A, B, C, D]
+      - question: "Zweite Besichtigung (anderer Zeitpunkt / Licht)?"
+        priority: high
+        scenarios: [A, B, C]
+      - question: "Bauexperte / Architekt zur Besichtigung mitgenommen?"
+        priority: high
+        scenarios: [A, B, C, D]
+      - question: "Nachbarn befragt (Lärm, Probleme, Gemeinschaft)?"
+        priority: normal
+        scenarios: [B, C]
