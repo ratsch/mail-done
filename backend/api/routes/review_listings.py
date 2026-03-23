@@ -93,6 +93,48 @@ def _resolve_status(current_status: str, action: str) -> str:
     return new_status
 
 
+def _record_action_internal(
+    db: Session,
+    listing: PropertyListing,
+    user: LabMember,
+    action: str,
+    notes: Optional[str] = None,
+) -> PropertyAction:
+    """Shared helper: append a PropertyAction row and update listing_status.
+
+    Used by both record_action() and request_info() to avoid duplicating
+    the status-transition logic.
+    """
+    new_status = _resolve_status(listing.listing_status or "new", action)
+
+    action_row = PropertyAction(
+        listing_id=listing.id,
+        acted_by=user.id,
+        action=action,
+        notes=notes,
+        resulting_status=new_status,
+    )
+    db.add(action_row)
+
+    listing.listing_status = new_status
+    if new_status == "archived":
+        listing.archived_at = datetime.now(timezone.utc)
+
+    _audit(db, str(user.id), str(listing.id), "listing_action",
+           action=action, resulting_status=new_status)
+
+    return action_row
+
+
+def _audit(db: Session, user_id: str, entity_id: str, action_type: str, **details):
+    """Best-effort audit log — never raises."""
+    try:
+        log_audit_event(db=db, user_id=user_id, email_id=entity_id,
+                        action_type=action_type, action_details=details or None)
+    except Exception:
+        pass
+
+
 def _get_listing_or_404(db: Session, listing_id: str) -> PropertyListing:
     """Fetch listing by UUID or raise 404."""
     try:
@@ -165,6 +207,7 @@ async def create_collection(
     db.add(coll)
     db.commit()
     db.refresh(coll)
+    _audit(db, str(current_user.id), str(coll.id), "collection_create", name=req.name.strip())
     return CollectionResponse(
         id=str(coll.id),
         name=coll.name,
@@ -262,6 +305,7 @@ async def add_to_collection(
     )
     db.add(item)
     db.commit()
+    _audit(db, str(current_user.id), str(listing_uid), "collection_add", collection_id=collection_id)
     return {"success": True, "message": "Listing added to collection"}
 
 
@@ -286,6 +330,7 @@ async def remove_from_collection(
 
     db.delete(item)
     db.commit()
+    _audit(db, str(current_user.id), str(item_uid), "collection_remove", collection_id=collection_id)
     return {"success": True, "message": "Listing removed from collection"}
 
 
@@ -703,9 +748,9 @@ async def list_listings(
     }
     sort_col = allowed_sort.get(sort_by, PropertyListing.overall_recommendation)
     if sort_order == "asc":
-        query = query.order_by(asc(sort_col))
+        query = query.order_by(asc(sort_col).nullslast())
     else:
-        query = query.order_by(desc(sort_col))
+        query = query.order_by(desc(sort_col).nullslast())
 
     # --- Pagination ---
     offset = (page - 1) * limit
@@ -841,25 +886,13 @@ async def list_listings(
 @router.get("/{listing_id}")
 async def get_listing_detail(
     listing_id: str,
-    request: Request,
     current_user: LabMember = Depends(get_current_reviewer_hybrid),
     db: Session = Depends(get_db),
 ):
     """Full listing detail."""
     listing = _get_listing_or_404(db, listing_id)
 
-    # Audit log
-    try:
-        log_audit_event(
-            db=db,
-            user_id=str(current_user.id),
-            email_id=str(listing.id),
-            action_type="listing_view",
-            ip_address=request.client.host if request.client else None,
-            action_details={"listing_id": str(listing.id)},
-        )
-    except Exception as e:
-        logger.error(f"Failed to log listing view: {e}")
+    _audit(db, str(current_user.id), str(listing.id), "listing_view")
 
     return _build_detail_response(db, listing, current_user)
 
@@ -1116,14 +1149,8 @@ async def submit_review(
 
     db.commit()
 
-    try:
-        log_audit_event(
-            db=db, user_id=str(current_user.id), email_id=str(listing.id),
-            action_type=action_type,
-            action_details={"rating": review.rating, "comment_length": len(review.comment) if review.comment else 0},
-        )
-    except Exception as e:
-        logger.error(f"Failed to log review action: {e}")
+    _audit(db, str(current_user.id), str(listing.id), action_type,
+           rating=review.rating, comment_length=len(review.comment) if review.comment else 0)
 
     reviews = db.query(PropertyReview).filter(PropertyReview.listing_id == listing.id).all()
     avg = sum(r.rating for r in reviews) / len(reviews) if reviews else None
@@ -1148,13 +1175,7 @@ async def delete_review(
     db.delete(review)
     db.commit()
 
-    try:
-        log_audit_event(
-            db=db, user_id=str(current_user.id), email_id=str(listing.id),
-            action_type="review_delete", action_details={},
-        )
-    except Exception:
-        pass
+    _audit(db, str(current_user.id), str(listing.id), "review_delete")
 
     return {"success": True, "message": "Review deleted"}
 
@@ -1171,33 +1192,11 @@ async def record_action(
     """Record an action and update listing_status."""
     listing = _get_listing_or_404(db, listing_id)
 
-    new_status = _resolve_status(listing.listing_status or "new", req.action)
-
-    action = PropertyAction(
-        listing_id=listing.id,
-        acted_by=current_user.id,
-        action=req.action,
-        notes=req.notes,
-        resulting_status=new_status,
-    )
-    db.add(action)
-
-    listing.listing_status = new_status
-    if new_status == "archived":
-        listing.archived_at = datetime.now(timezone.utc)
+    action = _record_action_internal(db, listing, current_user, req.action, req.notes)
     db.commit()
     db.refresh(action)
 
-    try:
-        log_audit_event(
-            db=db, user_id=str(current_user.id), email_id=str(listing.id),
-            action_type="listing_action",
-            action_details={"action": req.action, "resulting_status": new_status},
-        )
-    except Exception as e:
-        logger.error(f"Failed to log action: {e}")
-
-    actor = db.query(LabMember).filter(LabMember.id == current_user.id).first()
+    actor = current_user
     return ActionResponse(
         id=str(action.id),
         action=action.action,
@@ -1257,6 +1256,7 @@ async def trigger_enrichment(
     #   ListingReprocessor._score_listing()
     # TODO: Wire up once Plan D modules are implemented
 
+    _audit(db, str(current_user.id), str(listing.id), "enrichment_trigger", current_tier=listing.tier)
     return {
         "message": "Enrichment queued",
         "listing_id": str(listing.id),
@@ -1278,6 +1278,9 @@ async def update_houzy_params(
     listing.ausbaustandard_rating = req.ausbaustandard
     listing.ausbaustandard_confirmed = True
     db.commit()
+
+    _audit(db, str(current_user.id), str(listing.id), "houzy_update",
+           zustand=req.zustand, ausbaustandard=req.ausbaustandard)
 
     # TODO: Trigger Houzy re-fetch with confirmed params
 
@@ -1336,6 +1339,8 @@ async def generate_checklist(
     listing.tier = 3
     db.commit()
 
+    _audit(db, str(current_user.id), str(listing.id), "due_diligence_generate",
+           items_created=items_created)
     return {"success": True, "items_created": items_created}
 
 
@@ -1395,6 +1400,10 @@ async def update_checklist_item(
 
     db.commit()
     db.refresh(item)
+
+    _audit(db, str(current_user.id), str(listing_id), "due_diligence_update",
+           item_id=item_id, status=item.status)
+
     return DueDiligenceItemResponse(
         id=str(item.id), category=item.category, question=item.question,
         priority=item.priority, status=item.status or "open", answer=item.answer,
@@ -1425,6 +1434,10 @@ async def add_document(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    _audit(db, str(current_user.id), str(listing.id), "document_add",
+           document_type=req.document_type, filename=req.filename)
+
     return DocumentResponse(
         id=str(doc.id), document_type=doc.document_type, filename=doc.filename,
         gdrive_link=doc.gdrive_link, gdrive_file_id=doc.gdrive_file_id,
@@ -1481,14 +1494,8 @@ async def update_listing(
     db.commit()
     db.refresh(listing)
 
-    try:
-        log_audit_event(
-            db=db, user_id=str(current_user.id), email_id=str(listing.id),
-            action_type="listing_update",
-            action_details={"fields_updated": list(update_data.keys())},
-        )
-    except Exception:
-        pass
+    _audit(db, str(current_user.id), str(listing.id), "listing_update",
+           fields_updated=list(update_data.keys()))
 
     return {"success": True, "message": f"Updated {len(update_data)} field(s)"}
 
@@ -1508,38 +1515,38 @@ async def request_info(
     """
     listing = _get_listing_or_404(db, listing_id)
 
-    # Check for dedup — warn if already contacted
+    # Check for dedup — warn if already contacted recently
+    warning = None
     if listing.last_contacted_at:
-        days_since = (datetime.now(timezone.utc) - listing.last_contacted_at.replace(tzinfo=timezone.utc)).days
+        last = listing.last_contacted_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        days_since = (datetime.now(timezone.utc) - last).days
         if days_since < 7:
-            # Still proceed but include warning
-            pass
+            warning = f"Agent was already contacted {days_since} day(s) ago"
 
     # Record contact details
     listing.last_contacted_at = datetime.now(timezone.utc)
     listing.contact_method = "email" if listing.agent_email else "web_form"
 
-    # Delegate to action log
-    new_status = _resolve_status(listing.listing_status or "new", "request_info")
-    action = PropertyAction(
-        listing_id=listing.id,
-        acted_by=current_user.id,
-        action="request_info",
+    # Delegate to shared action helper
+    _record_action_internal(
+        db, listing, current_user, "request_info",
         notes=req.message_template or "Info request sent to agent",
-        resulting_status=new_status,
     )
-    db.add(action)
-    listing.listing_status = new_status
     db.commit()
 
     # TODO: Actual email sending via SMTP / Playwright web form
 
-    return {
+    result = {
         "success": True,
         "message": "Info request recorded",
         "contact_method": listing.contact_method,
         "agent_email": listing.agent_email,
     }
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 # ---- Share Tokens ----------------------------------------------------------
@@ -1579,6 +1586,9 @@ async def create_share_token(
 
     base_url = os.getenv("FRONTEND_URL", "https://immo.tailed9d1e.ts.net")
     share_url = f"{base_url}/shared/{raw_token}"
+
+    _audit(db, str(current_user.id), str(listing.id), "share_token_create",
+           expires_in_hours=req.expires_in_hours)
 
     return ShareTokenResponse(
         id=str(share.id),
@@ -1660,6 +1670,7 @@ async def revoke_share_token(
 
     st.is_revoked = True
     db.commit()
+    _audit(db, str(current_user.id), str(st.listing_id), "share_token_revoke", token_id=token_id)
     return {"success": True, "message": "Share token revoked"}
 
 
@@ -1693,13 +1704,7 @@ async def update_private_notes(
 
     db.commit()
 
-    try:
-        log_audit_event(
-            db=db, user_id=str(current_user.id), email_id=str(listing.id),
-            action_type="private_note_update",
-            action_details={"notes_length": len(req.notes) if req.notes else 0},
-        )
-    except Exception:
-        pass
+    _audit(db, str(current_user.id), str(listing.id), "private_note_update",
+           notes_length=len(req.notes) if req.notes else 0)
 
     return {"success": True, "message": "Private notes saved"}
