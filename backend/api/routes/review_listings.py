@@ -135,6 +135,64 @@ def _audit(db: Session, user_id: str, entity_id: str, action_type: str, **detail
         pass
 
 
+async def _houzy_refetch(
+    listing_id: str,
+    houzy_property_id: str,
+    zustand: float,
+    ausbaustandard: float,
+    asking_price: Optional[int],
+):
+    """Background task: update Houzy params and re-fetch valuation.
+
+    Runs after the response is sent. Updates the listing in a new DB session.
+    """
+    from backend.core.database.connection import SessionLocal
+    try:
+        from backend.core.real_estate.houzy_client import HouzyClient
+
+        client = HouzyClient()
+        await client.login()
+
+        # Update property parameters in Houzy
+        await client.update_property_params(
+            houzy_property_id,
+            zustand=zustand,
+            ausbaustandard=ausbaustandard,
+        )
+
+        # Re-fetch valuation with updated params
+        valuation = await client.get_valuation(houzy_property_id, use_cache=False)
+
+        # Write results back to DB
+        db = SessionLocal()
+        try:
+            listing = db.query(PropertyListing).filter(
+                PropertyListing.id == UUID(listing_id)
+            ).first()
+            if listing and valuation.houzy_mid > 0:
+                listing.houzy_min = valuation.houzy_min
+                listing.houzy_mid = valuation.houzy_mid
+                listing.houzy_max = valuation.houzy_max
+                listing.houzy_quality_pct = valuation.quality_pct
+                listing.houzy_location_scores = valuation.location_scores.to_dict()
+                listing.houzy_fetched_at = datetime.now(timezone.utc)
+
+                if asking_price and asking_price > 0:
+                    listing.price_vs_houzy_pct = valuation.price_vs_houzy_pct(asking_price)
+                    listing.houzy_assessment = valuation.assessment(asking_price)
+
+                db.commit()
+                logger.info(f"Houzy re-fetch complete for {listing_id[:8]}: "
+                           f"CHF {valuation.houzy_min:,}–{valuation.houzy_mid:,}–{valuation.houzy_max:,}")
+            else:
+                logger.warning(f"Houzy re-fetch returned empty valuation for {listing_id[:8]}")
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Houzy re-fetch failed for {listing_id[:8]}: {e}")
+
+
 def _get_listing_or_404(db: Session, listing_id: str) -> PropertyListing:
     """Fetch listing by UUID or raise 404."""
     try:
@@ -1268,10 +1326,11 @@ async def trigger_enrichment(
 async def update_houzy_params(
     listing_id: str,
     req: HouzyUpdateRequest,
+    background_tasks: BackgroundTasks,
     current_user: LabMember = Depends(get_current_reviewer_hybrid),
     db: Session = Depends(get_db),
 ):
-    """User confirms/adjusts Zustand + Ausbaustandard."""
+    """User confirms/adjusts Zustand + Ausbaustandard, triggers Houzy re-fetch."""
     listing = _get_listing_or_404(db, listing_id)
     listing.zustand_rating = req.zustand
     listing.zustand_confirmed = True
@@ -1282,9 +1341,21 @@ async def update_houzy_params(
     _audit(db, str(current_user.id), str(listing.id), "houzy_update",
            zustand=req.zustand, ausbaustandard=req.ausbaustandard)
 
-    # TODO: Trigger Houzy re-fetch with confirmed params
+    # Trigger Houzy re-fetch in background if property has a Houzy ID
+    houzy_triggered = False
+    if listing.houzy_property_id:
+        background_tasks.add_task(
+            _houzy_refetch, str(listing.id), listing.houzy_property_id,
+            req.zustand, req.ausbaustandard, listing.price_chf,
+        )
+        houzy_triggered = True
 
-    return {"success": True, "message": "Houzy parameters updated"}
+    return {
+        "success": True,
+        "message": "Houzy parameters updated" + (
+            " — re-fetch triggered" if houzy_triggered else " (no Houzy property linked)"
+        ),
+    }
 
 
 # ---- Due Diligence ---------------------------------------------------------
