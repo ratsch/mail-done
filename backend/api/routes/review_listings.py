@@ -37,7 +37,7 @@ from backend.api.listing_schemas import (
     AddDocumentRequest, DocumentResponse, SourceResponse,
     CreateCollectionRequest, AddCollectionItemRequest,
     CollectionResponse, CollectionDetailResponse,
-    HouzyUpdateRequest, RequestInfoRequest,
+    HouzyUpdateRequest, RequestInfoRequest, BatchActionRequest,
     CreateShareTokenRequest, ShareTokenResponse, ShareTokenListItem, ShareTokenPermissions,
     DashboardStatsResponse, MapDataItem,
 )
@@ -610,6 +610,61 @@ async def export_listings(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---- Batch Actions ---------------------------------------------------------
+
+@router.post("/batch-action")
+async def batch_action(
+    req: BatchActionRequest,
+    current_user: LabMember = Depends(get_current_admin_hybrid),
+    db: Session = Depends(get_db),
+):
+    """Apply an action to multiple listings at once.
+
+    Supported actions:
+      - delete: permanently delete listings and all related data
+      - archive: set listing_status='archived' + record action
+      - not_interested: set listing_status='decided' + record action
+    """
+    uids = []
+    for lid in req.listing_ids:
+        try:
+            uids.append(UUID(lid))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID: {lid}")
+
+    listings = db.query(PropertyListing).filter(PropertyListing.id.in_(uids)).all()
+    if not listings:
+        raise HTTPException(status_code=404, detail="No listings found for the given IDs")
+
+    found_ids = {l.id for l in listings}
+    missing = [lid for lid in uids if lid not in found_ids]
+
+    processed = 0
+    if req.action == "delete":
+        for listing in listings:
+            db.delete(listing)
+            processed += 1
+        db.commit()
+    elif req.action in ("archive", "not_interested"):
+        for listing in listings:
+            _record_action_internal(db, listing, current_user, req.action, req.notes)
+            processed += 1
+        db.commit()
+
+    _audit(db, str(current_user.id), "batch", f"batch_{req.action}",
+           count=processed, listing_ids=[str(u) for u in uids[:10]])
+
+    result = {
+        "success": True,
+        "action": req.action,
+        "processed": processed,
+        "total_requested": len(uids),
+    }
+    if missing:
+        result["missing_ids"] = [str(m) for m in missing]
+    return result
 
 
 # ---- Shared listing (public, no auth) -------------------------------------

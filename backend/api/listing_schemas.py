@@ -127,6 +127,22 @@ class CreateShareTokenRequest(BaseModel):
     can_view_documents: bool = Field(False, description="Allow viewing linked documents")
 
 
+class BatchActionRequest(BaseModel):
+    """Request for batch actions on multiple listings."""
+    listing_ids: List[str] = Field(..., min_length=1, max_length=100,
+                                    description="UUIDs of listings to act on")
+    action: str = Field(..., description="Action: delete, archive, not_interested")
+    notes: Optional[str] = Field(None, max_length=2000)
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        valid = {"delete", "archive", "not_interested"}
+        if v not in valid:
+            raise ValueError(f"Invalid batch action '{v}'. Must be one of: {', '.join(sorted(valid))}")
+        return v
+
+
 class RequestInfoRequest(BaseModel):
     """Request to send info request to listing agent."""
     message_template: Optional[str] = Field(None, max_length=5000,
