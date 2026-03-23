@@ -127,12 +127,22 @@ def _record_action_internal(
 
 
 def _audit(db: Session, user_id: str, entity_id: str, action_type: str, **details):
-    """Best-effort audit log — never raises."""
+    """Best-effort audit log — never raises.
+
+    The audit_log table has a FK on email_id → emails.id. Property listing IDs
+    aren't in the emails table, so we use a savepoint to avoid poisoning
+    the DB session on FK violation.
+    """
     try:
+        nested = db.begin_nested()  # SAVEPOINT
         log_audit_event(db=db, user_id=user_id, email_id=entity_id,
                         action_type=action_type, action_details=details or None)
+        nested.commit()
     except Exception:
-        pass
+        try:
+            db.rollback()  # Rollback to savepoint — session stays usable
+        except Exception:
+            pass
 
 
 async def _houzy_refetch(
