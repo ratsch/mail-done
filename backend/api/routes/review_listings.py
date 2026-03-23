@@ -5,7 +5,7 @@ Endpoints for listing, viewing, and managing property listings.
 Follows patterns from review_applications.py adapted for real estate domain.
 """
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, asc, select, and_, or_, cast
@@ -675,6 +675,256 @@ async def batch_action(
     if missing:
         result["missing_ids"] = [str(m) for m in missing]
     return result
+
+
+# ---- Photos & Google Drive -------------------------------------------------
+
+PHOTO_CACHE_DIR = "/tmp/property-photo-cache"
+GDRIVE_ROOT_FOLDER_ID = os.getenv(
+    "PROPERTY_GDRIVE_ROOT_FOLDER_ID",
+    "1I16OinMvANC9W1CkhziLvDoGSqq9fWbi",
+)
+SCENARIO_FOLDERS = {
+    "A": "Klosters",
+    "B": "Zurich-House",
+    "C": "Zurich-MFH",
+    "D": "Zurich-Apartment",
+}
+
+
+def _get_drive_client():
+    """Lazy-init Google Drive client for property photo archival."""
+    sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "")
+    if not sa_path or not os.path.exists(sa_path):
+        raise HTTPException(status_code=500, detail="Google Drive service account not configured")
+    from backend.core.google.drive_client import GoogleDriveClient
+    return GoogleDriveClient(sa_path, GDRIVE_ROOT_FOLDER_ID)
+
+
+def _scenario_folder(listing: PropertyListing) -> str:
+    """Return the Drive subfolder name for a listing's scenario."""
+    return SCENARIO_FOLDERS.get(listing.best_scenario or "D", "Zurich-Apartment")
+
+
+def _listing_folder_name(listing: PropertyListing) -> str:
+    """Human-readable folder name for a listing."""
+    addr = listing.address or listing.municipality or str(listing.id)[:8]
+    return addr.replace("/", "-").strip()
+
+
+@router.get("/{listing_id}/photos/{index}")
+async def get_photo(
+    listing_id: str,
+    index: int,
+    current_user: LabMember = Depends(get_current_reviewer_hybrid),
+    db: Session = Depends(get_db),
+):
+    """Serve a listing photo with ephemeral local cache.
+
+    1. Check local cache → hit = serve (~50ms)
+    2. Miss → fetch from original URL → cache → serve
+    """
+    from pathlib import Path
+    import httpx as _httpx
+
+    listing = _get_listing_or_404(db, listing_id)
+    urls = listing.photo_urls or []
+    if index < 0 or index >= len(urls):
+        raise HTTPException(status_code=404, detail=f"Photo index {index} out of range (0-{len(urls)-1})")
+
+    photo_url = urls[index]
+
+    # Check local cache
+    cache_dir = Path(PHOTO_CACHE_DIR) / str(listing.id)
+    cache_file = cache_dir / f"{index}.jpg"
+
+    if cache_file.exists():
+        return StreamingResponse(
+            open(cache_file, "rb"),
+            media_type="image/jpeg",
+            headers={"X-Cache": "hit"},
+        )
+
+    # Fetch from original URL
+    try:
+        async with _httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(photo_url)
+            resp.raise_for_status()
+            content = resp.content
+            content_type = resp.headers.get("content-type", "image/jpeg")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch photo: {e}")
+
+    # Cache locally
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file.write_bytes(content)
+    except Exception:
+        pass  # Cache write failure is not critical
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=content_type,
+        headers={"X-Cache": "miss"},
+    )
+
+
+@router.post("/{listing_id}/photos/archive", status_code=202)
+async def archive_photos(
+    listing_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: LabMember = Depends(get_current_admin_hybrid),
+    db: Session = Depends(get_db),
+):
+    """Download photos from listing URLs and upload to Google Drive.
+
+    Creates per-property subfolder in the scenario's Drive folder.
+    Sets photos_archived=True and gdrive_folder_url on completion.
+    """
+    listing = _get_listing_or_404(db, listing_id)
+    urls = listing.photo_urls or []
+    if not urls:
+        raise HTTPException(status_code=400, detail="No photo URLs to archive")
+
+    if listing.photos_archived:
+        raise HTTPException(status_code=409, detail="Photos already archived")
+
+    background_tasks.add_task(_archive_photos_task, str(listing.id))
+
+    _audit(db, str(current_user.id), str(listing.id), "photos_archive_trigger",
+           photo_count=len(urls))
+    return {
+        "message": "Photo archival started",
+        "listing_id": str(listing.id),
+        "photo_count": len(urls),
+    }
+
+
+async def _archive_photos_task(listing_id: str):
+    """Background: download photos and upload to Google Drive."""
+    from pathlib import Path
+    import httpx as _httpx
+    from backend.core.database.connection import SessionLocal
+
+    db = SessionLocal()
+    try:
+        listing = db.query(PropertyListing).filter(PropertyListing.id == UUID(listing_id)).first()
+        if not listing:
+            return
+
+        urls = listing.photo_urls or []
+        if not urls:
+            return
+
+        drive = _get_drive_client()
+
+        # Create folder structure: Scenario/Address/photos/
+        scenario_folder = _scenario_folder(listing)
+        listing_folder = _listing_folder_name(listing)
+        folder_id = drive.get_or_create_folder_structure([scenario_folder, listing_folder, "photos"])
+
+        # Download and upload each photo
+        cache_dir = Path(PHOTO_CACHE_DIR) / listing_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        uploaded = 0
+
+        async with _httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            for i, url in enumerate(urls):
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+
+                    # Save locally
+                    ext = "jpg"
+                    ct = resp.headers.get("content-type", "")
+                    if "png" in ct:
+                        ext = "png"
+                    elif "webp" in ct:
+                        ext = "webp"
+
+                    local_file = cache_dir / f"{i}.{ext}"
+                    local_file.write_bytes(resp.content)
+
+                    # Upload to Drive
+                    drive.upload_file(local_file, folder_id, file_name=f"photo_{i:03d}.{ext}")
+                    uploaded += 1
+                except Exception as e:
+                    logger.warning(f"Failed to archive photo {i} for {listing_id[:8]}: {e}")
+
+        # Update listing
+        listing.photos_archived = True
+        # Get folder URL
+        listing.gdrive_folder_id = folder_id
+        listing.gdrive_folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+        db.commit()
+
+        logger.info(f"Photos archived for {listing_id[:8]}: {uploaded}/{len(urls)} uploaded to Drive")
+
+    except Exception as e:
+        logger.error(f"Photo archival failed for {listing_id[:8]}: {e}")
+    finally:
+        db.close()
+
+
+@router.post("/{listing_id}/documents/upload", status_code=201)
+async def upload_document(
+    listing_id: str,
+    file: UploadFile,
+    document_type: str = Query(..., description="verkaufsbrochure, grundbuch, etc."),
+    current_user: LabMember = Depends(get_current_admin_hybrid),
+    db: Session = Depends(get_db),
+):
+    """Upload a document to Google Drive and create a PropertyDocument record."""
+    from pathlib import Path
+    import tempfile
+
+    listing = _get_listing_or_404(db, listing_id)
+
+    drive = _get_drive_client()
+
+    # Ensure listing has a Drive folder
+    scenario_folder = _scenario_folder(listing)
+    listing_folder = _listing_folder_name(listing)
+    folder_id = drive.get_or_create_folder_structure([scenario_folder, listing_folder])
+
+    # Save upload to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        result = drive.upload_file(tmp_path, folder_id, file_name=file.filename)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    # Create DB record
+    doc = PropertyDocument(
+        listing_id=listing.id,
+        document_type=document_type,
+        filename=file.filename,
+        gdrive_file_id=result.get("file_id"),
+        gdrive_link=result.get("web_view_link"),
+        source="user",
+    )
+    db.add(doc)
+
+    # Update listing Drive folder if not set
+    if not listing.gdrive_folder_id:
+        listing.gdrive_folder_id = folder_id
+        listing.gdrive_folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+
+    db.commit()
+    db.refresh(doc)
+
+    _audit(db, str(current_user.id), str(listing.id), "document_upload",
+           document_type=document_type, filename=file.filename)
+
+    return DocumentResponse(
+        id=str(doc.id), document_type=doc.document_type, filename=doc.filename,
+        gdrive_link=doc.gdrive_link, gdrive_file_id=doc.gdrive_file_id,
+        source=doc.source, uploaded_at=doc.uploaded_at,
+    )
 
 
 # ---- Shared listing (public, no auth) -------------------------------------
