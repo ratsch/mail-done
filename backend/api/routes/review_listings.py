@@ -684,26 +684,27 @@ GDRIVE_ROOT_FOLDER_ID = os.getenv(
     "PROPERTY_GDRIVE_ROOT_FOLDER_ID",
     "1I16OinMvANC9W1CkhziLvDoGSqq9fWbi",
 )
-SCENARIO_FOLDERS = {
-    "A": "Klosters",
-    "B": "Zurich-House",
-    "C": "Zurich-MFH",
-    "D": "Zurich-Apartment",
+# Pre-existing Drive subfolders by scenario (already shared with service account)
+SCENARIO_FOLDER_IDS = {
+    "A": "1MNVdd146xBiseOsVBORokEW7s4vuWm-p",  # Klosters
+    "B": "1R-pJweUDoG0rA-n2pVAJ7LKeS6PAuY3O",  # Zurich House (one family)
+    "C": "10fZ8wgekK09nGilSh-XpzDG_kcpEL4Bt",  # Zurich House (multi-family)
+    "D": "1VrDF_0ow6cK699nNrKtp4oe4sqHtZLho",  # Zurich Apartment
 }
 
 
-def _get_drive_client():
+def _get_drive_client(folder_id: str = None):
     """Lazy-init Google Drive client for property photo archival."""
     sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "")
     if not sa_path or not os.path.exists(sa_path):
         raise HTTPException(status_code=500, detail="Google Drive service account not configured")
     from backend.core.google.drive_client import GoogleDriveClient
-    return GoogleDriveClient(sa_path, GDRIVE_ROOT_FOLDER_ID)
+    return GoogleDriveClient(sa_path, folder_id or GDRIVE_ROOT_FOLDER_ID)
 
 
-def _scenario_folder(listing: PropertyListing) -> str:
-    """Return the Drive subfolder name for a listing's scenario."""
-    return SCENARIO_FOLDERS.get(listing.best_scenario or "D", "Zurich-Apartment")
+def _scenario_drive_folder_id(listing: PropertyListing) -> str:
+    """Return the Drive folder ID for a listing's scenario."""
+    return SCENARIO_FOLDER_IDS.get(listing.best_scenario or "D", SCENARIO_FOLDER_IDS["D"])
 
 
 def _listing_folder_name(listing: PropertyListing) -> str:
@@ -734,16 +735,14 @@ async def get_photo(
 
     photo_url = urls[index]
 
-    # Check local cache
+    # Check local cache (try common extensions)
     cache_dir = Path(PHOTO_CACHE_DIR) / str(listing.id)
-    cache_file = cache_dir / f"{index}.jpg"
-
-    if cache_file.exists():
-        return StreamingResponse(
-            open(cache_file, "rb"),
-            media_type="image/jpeg",
-            headers={"X-Cache": "hit"},
-        )
+    for ext in ("jpg", "png", "webp"):
+        candidate = cache_dir / f"{index}.{ext}"
+        if candidate.exists():
+            mime = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
+            from fastapi.responses import FileResponse
+            return FileResponse(str(candidate), media_type=mime, headers={"X-Cache": "hit"})
 
     # Fetch from original URL
     try:
@@ -755,10 +754,17 @@ async def get_photo(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch photo: {e}")
 
+    # Determine extension from content-type
+    ext = "jpg"
+    if "png" in content_type:
+        ext = "png"
+    elif "webp" in content_type:
+        ext = "webp"
+
     # Cache locally
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file.write_bytes(content)
+        (cache_dir / f"{index}.{ext}").write_bytes(content)
     except Exception:
         pass  # Cache write failure is not critical
 
@@ -816,12 +822,13 @@ async def _archive_photos_task(listing_id: str):
         if not urls:
             return
 
-        drive = _get_drive_client()
+        scenario_id = _scenario_drive_folder_id(listing)
+        drive = _get_drive_client(scenario_id)
 
-        # Create folder structure: Scenario/Address/photos/
-        scenario_folder = _scenario_folder(listing)
+        # Create listing subfolder + photos/ inside the scenario folder
         listing_folder = _listing_folder_name(listing)
-        folder_id = drive.get_or_create_folder_structure([scenario_folder, listing_folder, "photos"])
+        listing_root_id = drive.get_or_create_folder_structure([listing_folder])
+        photos_folder_id = drive.get_or_create_folder_structure([listing_folder, "photos"])
 
         # Download and upload each photo
         cache_dir = Path(PHOTO_CACHE_DIR) / listing_id
@@ -846,16 +853,15 @@ async def _archive_photos_task(listing_id: str):
                     local_file.write_bytes(resp.content)
 
                     # Upload to Drive
-                    drive.upload_file(local_file, folder_id, file_name=f"photo_{i:03d}.{ext}")
+                    drive.upload_file(local_file, photos_folder_id, file_name=f"photo_{i:03d}.{ext}")
                     uploaded += 1
                 except Exception as e:
                     logger.warning(f"Failed to archive photo {i} for {listing_id[:8]}: {e}")
 
-        # Update listing
+        # Update listing — point to the listing root folder, not photos subfolder
         listing.photos_archived = True
-        # Get folder URL
-        listing.gdrive_folder_id = folder_id
-        listing.gdrive_folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+        listing.gdrive_folder_id = listing_root_id
+        listing.gdrive_folder_url = f"https://drive.google.com/drive/folders/{listing_root_id}"
         db.commit()
 
         logger.info(f"Photos archived for {listing_id[:8]}: {uploaded}/{len(urls)} uploaded to Drive")
@@ -880,12 +886,12 @@ async def upload_document(
 
     listing = _get_listing_or_404(db, listing_id)
 
-    drive = _get_drive_client()
+    scenario_id = _scenario_drive_folder_id(listing)
+    drive = _get_drive_client(scenario_id)
 
-    # Ensure listing has a Drive folder
-    scenario_folder = _scenario_folder(listing)
+    # Ensure listing has a Drive folder inside the scenario folder
     listing_folder = _listing_folder_name(listing)
-    folder_id = drive.get_or_create_folder_structure([scenario_folder, listing_folder])
+    folder_id = drive.get_or_create_folder_structure([listing_folder])
 
     # Save upload to temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp:
