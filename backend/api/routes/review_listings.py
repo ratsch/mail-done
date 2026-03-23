@@ -961,6 +961,8 @@ async def list_listings(
             red_flags=listing.red_flags,
             property_tags=listing.property_tags,
             completeness_pct=listing.completeness_pct,
+            enrichment_status=listing.enrichment_status,
+            enrichment_started_at=listing.enrichment_started_at,
             heating_type=listing.heating_type,
             heating_cost_yearly=listing.heating_cost_yearly,
             parking_spaces=listing.parking_spaces,
@@ -1184,6 +1186,7 @@ def _build_detail_response(
         estimated_renovation_low=listing.estimated_renovation_low,
         estimated_renovation_high=listing.estimated_renovation_high,
         estimated_nebenkosten=listing.estimated_nebenkosten,
+        enrichment_error=listing.enrichment_error,
         is_zweitwohnung=listing.is_zweitwohnung,
         is_baurecht=listing.is_baurecht,
         is_stockwerkeigentum=listing.is_stockwerkeigentum,
@@ -1360,20 +1363,31 @@ async def trigger_enrichment(
     """Trigger Tier 2 enrichment (scrape + Houzy + LLM scoring).
 
     Uses FastAPI BackgroundTasks. Frontend polls GET /{listing_id}
-    to detect completion (tier changes from 1→2, status→scored).
+    and checks enrichment_status to detect completion.
     """
     listing = _get_listing_or_404(db, listing_id)
 
-    # Placeholder — actual enrichment calls Plan D modules:
-    #   ListingScraper.scrape(), HouzyClient.get_valuation(),
-    #   ListingReprocessor._score_listing()
-    # TODO: Wire up once Plan D modules are implemented
+    if listing.enrichment_status == "in_progress":
+        raise HTTPException(
+            status_code=409,
+            detail="Enrichment already in progress for this listing",
+        )
+
+    # Mark as in_progress
+    listing.enrichment_status = "in_progress"
+    listing.enrichment_started_at = datetime.now(timezone.utc)
+    listing.enrichment_error = None
+    db.commit()
+
+    # TODO: Wire up Plan D modules (ListingScraper, HouzyClient, scoring)
+    # background_tasks.add_task(_run_enrichment, str(listing.id))
 
     _audit(db, str(current_user.id), str(listing.id), "enrichment_trigger", current_tier=listing.tier)
     return {
         "message": "Enrichment queued",
         "listing_id": str(listing.id),
         "current_tier": listing.tier,
+        "enrichment_status": "in_progress",
     }
 
 

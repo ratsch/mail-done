@@ -108,6 +108,9 @@ class PropertyListing(Base):
     estimated_renovation_low = Column(Integer, nullable=True)
     estimated_renovation_high = Column(Integer, nullable=True)
     estimated_nebenkosten = Column(Integer, nullable=True)
+    enrichment_status = Column(String, nullable=True)   # idle, in_progress, completed, failed
+    enrichment_started_at = Column(DateTime, nullable=True)
+    enrichment_error = Column(String, nullable=True)
 
     # --- LLM Analysis ---
     highlights = Column(JSON, nullable=True)

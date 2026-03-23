@@ -326,6 +326,8 @@ class ListingListItem(BaseModel):
     red_flags: Optional[List[str]] = None
     property_tags: Optional[List[str]] = None
     completeness_pct: Optional[int] = None
+    enrichment_status: Optional[str] = None  # idle, in_progress, completed, failed
+    enrichment_started_at: Optional[datetime] = None
     heating_type: Optional[str] = None
     heating_cost_yearly: Optional[int] = None
     parking_spaces: Optional[int] = None
@@ -392,6 +394,7 @@ class ListingDetailResponse(ListingListItem):
     estimated_renovation_low: Optional[int] = None
     estimated_renovation_high: Optional[int] = None
     estimated_nebenkosten: Optional[int] = None
+    enrichment_error: Optional[str] = None  # Error message if enrichment failed
 
     # Financing
     is_zweitwohnung: Optional[bool] = None
