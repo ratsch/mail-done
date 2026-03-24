@@ -708,9 +708,11 @@ def _scenario_drive_folder_id(listing: PropertyListing) -> str:
 
 
 def _listing_folder_name(listing: PropertyListing) -> str:
-    """Human-readable folder name for a listing."""
-    addr = listing.address or listing.municipality or str(listing.id)[:8]
-    return addr.replace("/", "-").strip()
+    """Human-readable folder name for a listing, with ID suffix to prevent collisions."""
+    addr = listing.address or listing.municipality or "unknown"
+    safe = addr.replace("/", "-").replace("\\", "-").strip()
+    short_id = str(listing.id)[:8]
+    return f"{safe} ({short_id})"
 
 
 @router.get("/{listing_id}/photos/{index}")
@@ -806,8 +808,12 @@ async def archive_photos(
     }
 
 
-async def _archive_photos_task(listing_id: str):
-    """Background: download photos and upload to Google Drive."""
+def _archive_photos_task(listing_id: str):
+    """Background (sync): download photos and upload to Google Drive.
+
+    Must be sync — FastAPI BackgroundTasks runs sync functions in a thread pool.
+    Uses httpx.Client (sync), not AsyncClient.
+    """
     from pathlib import Path
     import httpx as _httpx
     from backend.core.database.connection import SessionLocal
@@ -835,10 +841,10 @@ async def _archive_photos_task(listing_id: str):
         cache_dir.mkdir(parents=True, exist_ok=True)
         uploaded = 0
 
-        async with _httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        with _httpx.Client(timeout=15.0, follow_redirects=True) as client:
             for i, url in enumerate(urls):
                 try:
-                    resp = await client.get(url)
+                    resp = client.get(url)
                     resp.raise_for_status()
 
                     # Save locally
@@ -1896,6 +1902,20 @@ async def update_listing(
         price = listing.price_chf
         area = listing.living_area_sqm
         listing.price_per_sqm = int(price / area) if price and area and area > 0 else None
+
+    # Rename Google Drive folder if address changed and folder exists
+    if "address" in update_data and listing.gdrive_folder_id:
+        try:
+            scenario_id = _scenario_drive_folder_id(listing)
+            drive = _get_drive_client(scenario_id)
+            new_name = _listing_folder_name(listing)
+            drive.service.files().update(
+                fileId=listing.gdrive_folder_id,
+                body={"name": new_name},
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as e:
+            logger.warning(f"Failed to rename Drive folder for {listing_id[:8]}: {e}")
 
     db.commit()
     db.refresh(listing)
