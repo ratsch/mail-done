@@ -29,24 +29,24 @@ class GoogleDriveClient:
     
     def __init__(self, service_account_path: str, drive_folder_id: str):
         """
-        Initialize Google Drive client.
-        
+        Initialize Google Drive client with service account credentials.
+
         Args:
             service_account_path: Path to service account JSON key file
             drive_folder_id: Google Drive folder ID where files will be stored
         """
         self.drive_folder_id = drive_folder_id
         self.service_account_path = service_account_path
-        
+
         # Load credentials
         if not os.path.exists(service_account_path):
             raise FileNotFoundError(f"Service account file not found: {service_account_path}")
-        
+
         # Load service account email for error messages
         with open(service_account_path, 'r') as f:
             service_account_data = json.load(f)
             self.service_account_email = service_account_data.get('client_email', 'unknown')
-        
+
         # Initialize Drive API
         credentials = service_account.Credentials.from_service_account_file(
             service_account_path,
@@ -55,15 +55,49 @@ class GoogleDriveClient:
                 'https://www.googleapis.com/auth/spreadsheets'
             ]
         )
-        
+
         self.drive_service = build('drive', 'v3', credentials=credentials)
         self.gc = gspread.authorize(credentials)
-        
+
         # Verify folder access (read permissions)
         self._verify_folder_access()
-        
+
         # Skip write permission test - it's working and creates unnecessary test folders
         # self._verify_write_permissions()
+
+    @classmethod
+    def from_oauth(cls, client_id: str, client_secret: str, refresh_token: str,
+                   drive_folder_id: str) -> "GoogleDriveClient":
+        """
+        Create a GoogleDriveClient using OAuth2 user credentials instead of a service account.
+
+        This is needed for uploading files to regular Google Drive (not Shared Drives),
+        since service accounts have no storage quota on regular Drive.
+
+        Args:
+            client_id: OAuth2 client ID
+            client_secret: OAuth2 client secret
+            refresh_token: OAuth2 refresh token for the user
+            drive_folder_id: Google Drive folder ID where files will be stored
+        """
+        from google.oauth2.credentials import Credentials as OAuthCredentials
+
+        credentials = OAuthCredentials(
+            token=None,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            client_secret=client_secret,
+            token_uri='https://oauth2.googleapis.com/token',
+        )
+
+        instance = object.__new__(cls)
+        instance.drive_folder_id = drive_folder_id
+        instance.service_account_path = None
+        instance.service_account_email = f"oauth-user"
+        instance.drive_service = build('drive', 'v3', credentials=credentials)
+        instance.gc = None  # gspread not supported with OAuth creds in this path
+
+        return instance
         
         logger.info(f"Google Drive client initialized (folder ID: {drive_folder_id})")
     

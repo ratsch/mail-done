@@ -694,12 +694,36 @@ SCENARIO_FOLDER_IDS = {
 
 
 def _get_drive_client(folder_id: str = None):
-    """Lazy-init Google Drive client for property photo archival."""
-    sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "")
+    """Lazy-init Google Drive client for property photo archival.
+
+    Prefers OAuth (personal account) over service account, since service
+    accounts cannot upload files to regular Google Drive.
+    """
+    target_folder = folder_id or GDRIVE_ROOT_FOLDER_ID
+
+    # Try OAuth first (personal Google account — can upload to regular Drive)
+    refresh_token = os.getenv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN")
+    if refresh_token:
+        from backend.core.google.drive_client import GoogleDriveClient
+        client_id = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_ID")
+        client_secret = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET")
+        return GoogleDriveClient.from_oauth(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+            drive_folder_id=target_folder,
+        )
+
+    # Fall back to service account
+    sa_path = os.getenv("GOOGLE_PROPERTY_SERVICE_ACCOUNT_PATH",
+                        os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", ""))
+    if sa_path and not os.path.isabs(sa_path):
+        config_dir = os.getenv("CONFIG_DIR", "/app/config")
+        sa_path = os.path.join(config_dir, sa_path)
     if not sa_path or not os.path.exists(sa_path):
-        raise HTTPException(status_code=500, detail="Google Drive service account not configured")
+        raise HTTPException(status_code=500, detail=f"Google Drive not configured")
     from backend.core.google.drive_client import GoogleDriveClient
-    return GoogleDriveClient(sa_path, folder_id or GDRIVE_ROOT_FOLDER_ID)
+    return GoogleDriveClient(sa_path, target_folder)
 
 
 def _scenario_drive_folder_id(listing: PropertyListing) -> str:
@@ -1044,7 +1068,7 @@ async def list_listings(
 
     # --- Filters ---
     if exclude_archived:
-        query = query.filter(PropertyListing.listing_status != "archived")
+        query = query.filter(PropertyListing.listing_status.notin_(["archived", "deleted", "excluded"]))
 
     if listing_status:
         query = query.filter(PropertyListing.listing_status == listing_status)
@@ -1130,6 +1154,10 @@ async def list_listings(
         "created_at": PropertyListing.created_at,
         "price_vs_houzy_pct": PropertyListing.price_vs_houzy_pct,
         "days_on_market": PropertyListing.days_on_market,
+        "monthly_cost": PropertyListing.monthly_cost,
+        "monthly_total": PropertyListing.monthly_total,
+        "total_cash_needed": PropertyListing.total_cash_needed,
+        "sun_score": PropertyListing.sun_score,
     }
     sort_col = allowed_sort.get(sort_by, PropertyListing.overall_recommendation)
     if sort_order == "asc":
@@ -1216,6 +1244,7 @@ async def list_listings(
             price_per_sqm=listing.price_per_sqm,
             listing_source=listing.listing_source,
             listing_url=listing.listing_url,
+            listing_ref_id=listing.listing_ref_id,
             listing_status=listing.listing_status or "new",
             tier=listing.tier or 1,
             macro_location_score=listing.macro_location_score,
@@ -1229,6 +1258,10 @@ async def list_listings(
             houzy_mid=listing.houzy_mid,
             price_vs_houzy_pct=listing.price_vs_houzy_pct,
             houzy_assessment=listing.houzy_assessment,
+            monthly_cost=listing.monthly_cost,
+            monthly_amortization=listing.monthly_amortization,
+            monthly_total=listing.monthly_total,
+            total_cash_needed=listing.total_cash_needed,
             highlights=listing.highlights,
             red_flags=listing.red_flags,
             property_tags=listing.property_tags,
@@ -1248,6 +1281,9 @@ async def list_listings(
             has_lake_view=listing.has_lake_view,
             has_garden_access=listing.has_garden_access,
             has_terrace=listing.has_terrace,
+            terrace_orientation=listing.terrace_orientation,
+            sun_exposure_notes=listing.sun_exposure_notes,
+            sun_score=listing.sun_score,
             photo_urls=listing.photo_urls,
             first_seen=listing.first_seen,
             days_on_market=listing.days_on_market,
@@ -1403,6 +1439,7 @@ def _build_detail_response(
         price_per_sqm=listing.price_per_sqm,
         listing_source=listing.listing_source,
         listing_url=listing.listing_url,
+        listing_ref_id=listing.listing_ref_id,
         listing_status=listing.listing_status or "new",
         tier=listing.tier or 1,
         macro_location_score=listing.macro_location_score,
@@ -1416,6 +1453,10 @@ def _build_detail_response(
         houzy_mid=listing.houzy_mid,
         price_vs_houzy_pct=listing.price_vs_houzy_pct,
         houzy_assessment=listing.houzy_assessment,
+        monthly_cost=listing.monthly_cost,
+        monthly_amortization=listing.monthly_amortization,
+        monthly_total=listing.monthly_total,
+        total_cash_needed=listing.total_cash_needed,
         highlights=listing.highlights,
         red_flags=listing.red_flags,
         property_tags=listing.property_tags,
@@ -1433,6 +1474,9 @@ def _build_detail_response(
         has_lake_view=listing.has_lake_view,
         has_garden_access=listing.has_garden_access,
         has_terrace=listing.has_terrace,
+        terrace_orientation=listing.terrace_orientation,
+        sun_exposure_notes=listing.sun_exposure_notes,
+        sun_score=listing.sun_score,
         photo_urls=listing.photo_urls,
         first_seen=listing.first_seen,
         days_on_market=listing.days_on_market,
@@ -1462,6 +1506,8 @@ def _build_detail_response(
         is_zweitwohnung=listing.is_zweitwohnung,
         is_baurecht=listing.is_baurecht,
         is_stockwerkeigentum=listing.is_stockwerkeigentum,
+        financing_details=listing.financing_details,
+        financing_summary=listing.financing_summary,
         ai_reasoning=listing.ai_reasoning,
         missing_fields=listing.missing_fields,
         agent_name=listing.agent_name,

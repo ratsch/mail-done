@@ -58,11 +58,15 @@ class PropertyListing(Base):
     heating_cost_yearly = Column(Integer, nullable=True)
     parking_spaces = Column(Integer, nullable=True)
     parking_included = Column(Boolean, nullable=True)
+    garage_price = Column(Float, nullable=True)  # Separate garage/parking cost (CHF), 0 if included
     num_units_in_building = Column(Integer, nullable=True)
     wertquote = Column(String, nullable=True)           # STWE share e.g. "44/1000"
     erneuerungsfonds_chf = Column(Integer, nullable=True)
     nebenkosten_yearly = Column(Integer, nullable=True)
     zweitwohnung_allowed = Column(Boolean, nullable=True)
+    terrace_orientation = Column(String(50), nullable=True)  # e.g. "SE/SW", "E/N", "S"
+    sun_exposure_notes = Column(Text, nullable=True)  # Free text about sun situation
+    sun_score = Column(Integer, nullable=True)  # 1-10, user-editable sun assessment
     has_mountain_view = Column(Boolean, nullable=True)
     has_lake_view = Column(Boolean, nullable=True)
     has_garden_access = Column(Boolean, nullable=True)
@@ -72,6 +76,12 @@ class PropertyListing(Base):
     is_zweitwohnung = Column(Boolean, nullable=True)
     is_baurecht = Column(Boolean, nullable=True)
     is_stockwerkeigentum = Column(Boolean, nullable=True)
+    monthly_cost = Column(Float, nullable=True)
+    monthly_amortization = Column(Float, nullable=True)
+    monthly_total = Column(Float, nullable=True)
+    total_cash_needed = Column(Float, nullable=True)
+    financing_details = Column(JSON, nullable=True)
+    financing_summary = Column(Text, nullable=True)  # Pre-formatted text breakdown
 
     # --- LLM Scores (1-10, queryable) ---
     macro_location_score = Column(Integer, nullable=True)
@@ -146,6 +156,9 @@ class PropertyListing(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     geocoded = Column(Boolean, default=False)
+
+    # --- Raw scrape data ---
+    raw_scrape_data = Column(JSON, nullable=True)  # Full chrome-bridge extraction JSON (~5KB)
 
     # --- Photos ---
     photo_urls = Column(JSON, nullable=True)

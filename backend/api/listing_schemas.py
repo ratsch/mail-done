@@ -61,12 +61,55 @@ class ListingUpdateRequest(BaseModel):
     heating_type: Optional[str] = None
     parking_spaces: Optional[int] = None
     parking_included: Optional[bool] = None
+    garage_price: Optional[float] = None
+    num_units_in_building: Optional[int] = None
+    wertquote: Optional[str] = None
+    nebenkosten_yearly: Optional[int] = None
+    zweitwohnung_allowed: Optional[bool] = None
+    has_mountain_view: Optional[bool] = None
+    has_lake_view: Optional[bool] = None
+    has_garden_access: Optional[bool] = None
+    has_terrace: Optional[bool] = None
+    terrace_orientation: Optional[str] = None
+    sun_exposure_notes: Optional[str] = None
+    sun_score: Optional[int] = None
     agent_name: Optional[str] = None
     agent_email: Optional[str] = None
     agent_phone: Optional[str] = None
     agent_company: Optional[str] = None
+    # LLM-generated (editable, may be overwritten by LLM on re-score)
+    overall_recommendation: Optional[int] = None
+    macro_location_score: Optional[int] = None
+    micro_location_score: Optional[int] = None
+    property_quality_score: Optional[int] = None
+    garden_outdoor_score: Optional[int] = None
+    financial_score: Optional[int] = None
+    zustand_rating: Optional[float] = None
+    ausbaustandard_rating: Optional[float] = None
+    estimated_renovation_low: Optional[int] = None
+    estimated_renovation_high: Optional[int] = None
+
+    # Status
     outcome: Optional[str] = None
     outcome_notes: Optional[str] = None
+
+    @field_validator("terrace_orientation")
+    @classmethod
+    def validate_orientation(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            valid = {"N", "NE", "E", "SE", "S", "SW", "W", "NW",
+                     "N/NE", "N/NW", "S/SE", "S/SW", "E/NE", "E/SE", "W/NW", "W/SW",
+                     "SE/SW", "NE/NW", "E/N", "E/S", "W/N", "W/S", "SE/S", "SW/S"}
+            if v not in valid:
+                raise ValueError(f"Invalid orientation '{v}'. Use compass directions like N, SE, SE/SW")
+        return v
+
+    @field_validator("sun_score")
+    @classmethod
+    def validate_sun_score(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 1 or v > 10):
+            raise ValueError("sun_score must be 1-10")
+        return v
 
 
 class PrivateNotesRequest(BaseModel):
@@ -301,6 +344,7 @@ class ListingListItem(BaseModel):
     price_per_sqm: Optional[int] = None
     listing_source: Optional[str] = None
     listing_url: Optional[str] = None
+    listing_ref_id: Optional[str] = None
     listing_status: str = "new"
     tier: int = 1
 
@@ -316,10 +360,19 @@ class ListingListItem(BaseModel):
     applicable_scenarios: Optional[List[str]] = None
     best_scenario: Optional[str] = None
 
+    # Sun
+    sun_score: Optional[int] = None
+
     # Houzy
     houzy_mid: Optional[int] = None
     price_vs_houzy_pct: Optional[float] = None
     houzy_assessment: Optional[str] = None
+
+    # Financing
+    monthly_cost: Optional[float] = None
+    monthly_amortization: Optional[float] = None
+    monthly_total: Optional[float] = None
+    total_cash_needed: Optional[float] = None
 
     # Quick info
     highlights: Optional[List[str]] = None
@@ -341,6 +394,8 @@ class ListingListItem(BaseModel):
     has_lake_view: Optional[bool] = None
     has_garden_access: Optional[bool] = None
     has_terrace: Optional[bool] = None
+    terrace_orientation: Optional[str] = None
+    sun_exposure_notes: Optional[str] = None
 
     photo_urls: Optional[List[str]] = None
     first_seen: Optional[datetime] = None
@@ -400,6 +455,8 @@ class ListingDetailResponse(ListingListItem):
     is_zweitwohnung: Optional[bool] = None
     is_baurecht: Optional[bool] = None
     is_stockwerkeigentum: Optional[bool] = None
+    financing_details: Optional[Dict[str, Any]] = None
+    financing_summary: Optional[str] = None
 
     # AI analysis
     ai_reasoning: Optional[str] = None
