@@ -122,8 +122,12 @@ class HybridSearch:
         
         # Apply sender filter at DB level (uses index)
         if sender:
-            # Use ILIKE for flexible matching (email or domain)
-            q = q.filter(Email.from_address.ilike(f'%{sender}%'))
+            # Match against both from_address and from_name for flexible matching
+            from sqlalchemy import or_
+            q = q.filter(or_(
+                Email.from_address.ilike(f'%{sender}%'),
+                Email.from_name.ilike(f'%{sender}%'),
+            ))
         
         # Keyword search in subject and optionally body
         # **OPTIMIZATION: If query is wildcard (*) and sender filter is active, skip text search**
