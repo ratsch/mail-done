@@ -6,6 +6,11 @@
 # SQLite test artifacts
 :memory:*
 
+# Local data exports
+applications_export.xlsx
+listings_export.xlsx
+*_export.xlsx
+
 # Python
 __pycache__/
 *.pyc
