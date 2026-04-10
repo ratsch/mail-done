@@ -35,22 +35,30 @@ from mcp.types import (
 
 # Setup logging - log to file for audit trail
 log_dir = os.path.expanduser("~/.email-mcp-logs")
-os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"mcp_server_{datetime.now().strftime('%Y%m%d')}.log")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler()  # Also log to stderr for debugging
-    ]
-)
+try:
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"mcp_server_{datetime.now().strftime('%Y%m%d')}.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+except (OSError, PermissionError):
+    # Fallback: stderr only (e.g., when imported by FastAPI in container)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    )
 logger = logging.getLogger(__name__)
 
-# Security: REQUIRED API key for MCP access
+# Security: API key for MCP access
+# When running standalone (stdio), this is required.
+# When mounted via FastAPI SSE endpoint, auth is handled by mcp_mount.py.
 MCP_API_KEY = os.getenv("MCP_API_KEY")
-if not MCP_API_KEY:
+if not MCP_API_KEY and __name__ == "__main__":
     error_msg = (
         "MCP_API_KEY environment variable is required. "
         "Generate a secure key and set it in your .env file: "
@@ -58,8 +66,10 @@ if not MCP_API_KEY:
     )
     logger.critical(error_msg)
     raise ValueError(error_msg)
-else:
+elif MCP_API_KEY:
     logger.info("MCP API key authentication enabled")
+else:
+    logger.info("MCP API key not set (auth handled externally)")
 
 # Attachment feature flag
 MCP_ENABLE_FILE_DOWNLOADS = os.getenv("MCP_ENABLE_FILE_DOWNLOADS", "false").lower() == "true"
@@ -94,12 +104,79 @@ from mcp_server.api_client import EmailAPIClient
 
 def audit_log(tool_name: str, arguments: dict, user_info: str = "local"):
     """Log tool usage for audit trail."""
-    # Sanitize arguments - don't log full query text, just metadata
     safe_args = {
         k: v if k not in ('query', 'topic', 'sender') else f"<{len(str(v))} chars>"
         for k, v in arguments.items()
     }
     logger.info(f"AUDIT: tool={tool_name} user={user_info} args={safe_args}")
+
+
+# Tool group assignments — controls per-key tool visibility
+TOOL_GROUPS = {
+    # Email tools
+    "semantic_search": "email",
+    "search_by_sender": "email",
+    "search_by_topic": "email",
+    "find_similar_emails": "email",
+    "get_email_details": "email",
+    "list_categories": "email",
+    "list_top_senders": "email",
+    "semantic_search_unified": "email",
+    "list_imap_folders": "email",
+    "get_imap_folder_status": "email",
+    "list_imap_folder_emails": "email",
+    "list_attachments": "email",
+    "download_attachment": "email",
+    "clear_attachment_cache": "email",
+    # Document tools
+    "semantic_document_search": "email",
+    "find_similar_documents": "email",
+    "search_document_by_name": "email",
+    "get_document_details": "email",
+    "get_document_index_stats": "email",
+    "list_indexed_folder": "email",
+    "download_document": "email",
+    # Application tools
+    "list_applications": "applications",
+    "get_application_details": "applications",
+    "get_application_tags": "applications",
+    "get_application_collections": "applications",
+    "submit_review": "applications",
+    "make_decision": "applications",
+    "mark_not_application": "applications",
+    "export_applications": "applications",
+    # Listing tools
+    "list_property_listings": "listings",
+    "get_listing_details": "listings",
+    "update_listing": "listings",
+    "submit_listing_review": "listings",
+    "record_listing_action": "listings",
+    # Utility tools
+    "get_current_datetime": "utility",
+    "convert_timezone": "utility",
+    "get_date_info": "utility",
+}
+
+
+def _get_allowed_tool_groups() -> Optional[set]:
+    """Get allowed tool groups for current request. Returns None for 'all'."""
+    try:
+        from backend.api.mcp_mount import get_mcp_allowed_tools_override
+        tools_str = get_mcp_allowed_tools_override()
+        if tools_str and tools_str != "all":
+            return set(tools_str.split(","))
+    except ImportError:
+        pass
+    return None  # All tools allowed (stdio mode or admin key)
+
+
+def _is_tool_allowed(tool_name: str) -> bool:
+    """Check if a tool is allowed for the current request."""
+    allowed = _get_allowed_tool_groups()
+    if allowed is None:
+        return True  # All tools
+    group = TOOL_GROUPS.get(tool_name, "utility")
+    return group in allowed
 
 
 def create_server() -> Server:
@@ -984,6 +1061,253 @@ Use collection_id with list_applications to filter by collection.""",
             }
         ),
 
+        # ── Application write tools ────────────────────────────────────
+        Tool(
+            name="submit_review",
+            description="""[APPLICATION] Submit or update a review for an application.
+
+Upsert behavior: creates a new review or updates your existing one.
+
+**Parameters:**
+- email_id: UUID of the application email (from list_applications or get_application_details)
+- rating: 1-5 stars (required)
+- comment: Optional review comment (max 2000 chars)
+
+Returns the created/updated review with timestamp.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "email_id": {
+                        "type": "string",
+                        "description": "UUID of the application email"
+                    },
+                    "rating": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Rating from 1 to 5 stars"
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Optional review comment (max 2000 chars)"
+                    }
+                },
+                "required": ["email_id", "rating"]
+            }
+        ),
+        Tool(
+            name="make_decision",
+            description="""[APPLICATION] Make a final decision on an application (admin only).
+
+**Parameters:**
+- email_id: UUID of the application email
+- decision: One of 'accept', 'reject', 'interview', 'request_more_info', 'refer_to_direct_doctorate', 'delete'
+- notes: Optional admin notes (max 5000 chars)
+
+Triggers Google Drive archiving of the application materials.
+Returns the decision record.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "email_id": {
+                        "type": "string",
+                        "description": "UUID of the application email"
+                    },
+                    "decision": {
+                        "type": "string",
+                        "enum": ["accept", "reject", "interview", "request_more_info", "refer_to_direct_doctorate", "delete"],
+                        "description": "Decision on the application"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional admin notes (max 5000 chars)"
+                    }
+                },
+                "required": ["email_id", "decision"]
+            }
+        ),
+        Tool(
+            name="mark_not_application",
+            description="""[APPLICATION] Mark an email as not-an-application (admin only).
+
+Use when an email was misclassified as an application but is actually
+a general inquiry, spam, or unrelated correspondence.
+
+**Parameters:**
+- email_id: UUID of the application email
+- is_not_application: true to mark as not-an-application, false to reverse
+- reason: Optional reason for the flag change (max 500 chars)""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "email_id": {
+                        "type": "string",
+                        "description": "UUID of the application email"
+                    },
+                    "is_not_application": {
+                        "type": "boolean",
+                        "description": "true = not an application, false = is an application"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for the flag change (max 500 chars)"
+                    }
+                },
+                "required": ["email_id", "is_not_application"]
+            }
+        ),
+        Tool(
+            name="export_applications",
+            description="""[APPLICATION] Export applications to Excel or CSV (admin only).
+
+Exports up to 10,000 applications with all scores and details.
+
+**Parameters:**
+- format: 'excel' (default) or 'csv'
+- category: Filter by type (e.g., 'application-postdoc')
+- min_recommendation_score: Minimum overall recommendation (1-10)
+- exclude_pii: If true, excludes personal identifiable information
+
+Returns the file download URL.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "enum": ["excel", "csv"],
+                        "description": "Export format (default: excel)"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["application-phd", "application-postdoc", "application-intern"],
+                        "description": "Filter by application type"
+                    },
+                    "min_recommendation_score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Minimum overall recommendation score"
+                    },
+                    "exclude_pii": {
+                        "type": "boolean",
+                        "description": "Exclude personal identifiable information"
+                    }
+                },
+                "required": []
+            }
+        ),
+
+        # ── Property listing tools ─────────────────────────────────────
+        Tool(
+            name="list_property_listings",
+            description="""[LISTING] Search and filter property listings.
+
+**Filters:**
+- scenario: 'A' (Klosters), 'B' (Zurich house), 'C' (MFH), 'D' (Zurich apartment)
+- min_price / max_price: Price range in CHF
+- min_rooms: Minimum room count
+- property_type: 'apartment', 'house', 'chalet', etc.
+- listing_status: 'new', 'scored', 'under_evaluation', 'archived', etc.
+- exclude_archived: true (default) to hide archived/deleted
+- plz: Filter by postal code
+- sort_by: 'overall_recommendation', 'price', 'monthly_total', 'sun_score', etc.
+- sort_order: 'asc' or 'desc'
+
+**Results include:** address, price, rooms, m², scores, Houzy valuation, monthly cost, days on market.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scenario": {"type": "string", "enum": ["A", "B", "C", "D"]},
+                    "plz": {"type": "string"},
+                    "min_price": {"type": "integer"},
+                    "max_price": {"type": "integer"},
+                    "min_rooms": {"type": "number"},
+                    "property_type": {"type": "string"},
+                    "listing_status": {"type": "string"},
+                    "exclude_archived": {"type": "boolean", "default": True},
+                    "sort_by": {"type": "string", "default": "overall_recommendation"},
+                    "sort_order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+                    "page": {"type": "integer", "default": 1},
+                    "limit": {"type": "integer", "default": 25},
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_listing_details",
+            description="""[LISTING] Get full details of a property listing.
+
+Returns all data including: description, photos, agent info, Houzy valuation,
+LLM scores with reasoning, financing breakdown, renovation forecast,
+negotiation assessment, due diligence checklist, documents, and actions.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "listing_id": {"type": "string", "description": "UUID of the listing (short prefix OK)"}
+                },
+                "required": ["listing_id"]
+            }
+        ),
+        Tool(
+            name="update_listing",
+            description="""[LISTING] Update property listing fields.
+
+Editable fields: address, price_chf, rooms, living_area_sqm, year_built,
+property_type, description, heating_type, parking_spaces, garage_price,
+terrace_orientation, sun_exposure_notes, sun_score, zweitwohnung_allowed,
+agent_name/email/phone/company, outcome, outcome_notes, and more.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "listing_id": {"type": "string", "description": "UUID of the listing"},
+                    "fields": {"type": "object", "description": "Key-value pairs of fields to update"}
+                },
+                "required": ["listing_id", "fields"]
+            }
+        ),
+        Tool(
+            name="submit_listing_review",
+            description="""[LISTING] Submit a rating/review for a property listing.
+
+**Parameters:**
+- listing_id: UUID of the listing
+- rating: 1-5 stars
+- comment: Optional comment""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "listing_id": {"type": "string"},
+                    "rating": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "comment": {"type": "string"}
+                },
+                "required": ["listing_id", "rating"]
+            }
+        ),
+        Tool(
+            name="record_listing_action",
+            description="""[LISTING] Record an action on a property listing.
+
+Valid actions: 'interested', 'request_info', 'request_documentation',
+'request_viewing', 'request_bank_eval', 'make_offer',
+'not_interested', 'archive'.
+
+The listing status is updated automatically based on the action.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "listing_id": {"type": "string"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["interested", "request_info", "request_documentation",
+                                 "request_viewing", "request_bank_eval", "make_offer",
+                                 "not_interested", "archive"]
+                    },
+                    "notes": {"type": "string", "description": "Optional notes (max 5000 chars)"}
+                },
+                "required": ["listing_id", "action"]
+            }
+        ),
+
         # ── Time / Date utility tools ──────────────────────────────────
         Tool(
             name="get_current_datetime",
@@ -1146,13 +1470,23 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
     
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        """Return list of available tools."""
-        return TOOLS
-    
+        """Return list of available tools, filtered by per-key permissions."""
+        allowed = _get_allowed_tool_groups()
+        if allowed is None:
+            return TOOLS  # All tools (stdio mode or admin)
+        return [t for t in TOOLS if TOOL_GROUPS.get(t.name, "utility") in allowed]
+
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         """Execute a tool and return results."""
         try:
+            # Check tool permission
+            if not _is_tool_allowed(name):
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({"error": f"Tool '{name}' is not available with your access level."})
+                )]
+
             # Audit log the request
             audit_log(name, arguments)
             
@@ -1398,6 +1732,129 @@ REQUIRES: MCP_ENABLE_FILE_DOWNLOADS=true""",
 
             elif name == "get_application_collections":
                 result = await client.get_application_collections()
+
+            elif name == "submit_review":
+                audit_log("WRITE:submit_review", {
+                    "email_id": arguments["email_id"],
+                    "rating": arguments["rating"],
+                    "comment": arguments.get("comment", "")[:50],
+                })
+                result = await client.submit_review(
+                    email_id=arguments["email_id"],
+                    rating=arguments["rating"],
+                    comment=arguments.get("comment")
+                )
+                logger.info(f"AUDIT: Review submitted - email_id={arguments['email_id']}, rating={arguments['rating']}")
+
+            elif name == "make_decision":
+                audit_log("WRITE:make_decision", {
+                    "email_id": arguments["email_id"],
+                    "decision": arguments["decision"],
+                    "notes": (arguments.get("notes") or "")[:50],
+                })
+                result = await client.make_decision(
+                    email_id=arguments["email_id"],
+                    decision=arguments["decision"],
+                    notes=arguments.get("notes")
+                )
+                logger.info(f"AUDIT: Decision made - email_id={arguments['email_id']}, decision={arguments['decision']}")
+
+            elif name == "mark_not_application":
+                audit_log("WRITE:mark_not_application", {
+                    "email_id": arguments["email_id"],
+                    "is_not_application": arguments["is_not_application"],
+                    "reason": arguments.get("reason", ""),
+                })
+                result = await client.mark_not_application(
+                    email_id=arguments["email_id"],
+                    is_not_application=arguments["is_not_application"],
+                    reason=arguments.get("reason")
+                )
+                logger.info(f"AUDIT: Not-application flag - email_id={arguments['email_id']}, flag={arguments['is_not_application']}")
+
+            elif name == "export_applications":
+                audit_log("WRITE:export_applications", {
+                    "format": arguments.get("format", "excel"),
+                    "category": arguments.get("category"),
+                })
+                result = await client.export_applications(
+                    export_format=arguments.get("format", "excel"),
+                    category=arguments.get("category"),
+                    min_recommendation_score=arguments.get("min_recommendation_score"),
+                    exclude_pii=arguments.get("exclude_pii", False)
+                )
+
+            # ==========================================================================
+            # PROPERTY LISTING HANDLERS
+            # ==========================================================================
+            elif name == "list_property_listings":
+                result = await client.list_property_listings(
+                    scenario=arguments.get("scenario"),
+                    plz=arguments.get("plz"),
+                    min_price=arguments.get("min_price"),
+                    max_price=arguments.get("max_price"),
+                    min_rooms=arguments.get("min_rooms"),
+                    property_type=arguments.get("property_type"),
+                    listing_status=arguments.get("listing_status"),
+                    exclude_archived=arguments.get("exclude_archived", True),
+                    sort_by=arguments.get("sort_by", "overall_recommendation"),
+                    sort_order=arguments.get("sort_order", "desc"),
+                    page=arguments.get("page", 1),
+                    limit=arguments.get("limit", 25),
+                )
+
+            elif name == "get_listing_details":
+                listing_id = arguments["listing_id"]
+                # Support short IDs — try the full UUID first, fallback to prefix search
+                if len(listing_id) < 36:
+                    # Fetch all listings (unfiltered) and match by ID prefix
+                    all_result = await client.list_property_listings(
+                        limit=500, exclude_archived=False
+                    )
+                    items = all_result.get("items", [])
+                    matches = [i for i in items if i["id"].startswith(listing_id)]
+                    if matches:
+                        listing_id = matches[0]["id"]
+                    else:
+                        listing_id = None
+                if listing_id:
+                    result = await client.get_listing_details(listing_id)
+                else:
+                    result = {"error": f"No listing found matching '{arguments['listing_id']}'"}
+
+            elif name == "update_listing":
+                audit_log("WRITE:update_listing", {
+                    "listing_id": arguments["listing_id"],
+                    "fields": list(arguments["fields"].keys()),
+                })
+                result = await client.update_listing(
+                    listing_id=arguments["listing_id"],
+                    fields=arguments["fields"]
+                )
+                logger.info(f"AUDIT: Listing updated - {arguments['listing_id']}, fields={list(arguments['fields'].keys())}")
+
+            elif name == "submit_listing_review":
+                audit_log("WRITE:submit_listing_review", {
+                    "listing_id": arguments["listing_id"],
+                    "rating": arguments["rating"],
+                })
+                result = await client.submit_listing_review(
+                    listing_id=arguments["listing_id"],
+                    rating=arguments["rating"],
+                    comment=arguments.get("comment")
+                )
+
+            elif name == "record_listing_action":
+                audit_log("WRITE:record_listing_action", {
+                    "listing_id": arguments["listing_id"],
+                    "action": arguments["action"],
+                })
+                result = await client.record_listing_action(
+                    listing_id=arguments["listing_id"],
+                    action=arguments["action"],
+                    notes=arguments.get("notes")
+                )
+                logger.info(f"AUDIT: Listing action - {arguments['listing_id']}, action={arguments['action']}")
 
             # ── Time / Date utility handlers (no backend API needed) ───
             elif name == "get_current_datetime":

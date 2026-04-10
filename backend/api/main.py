@@ -258,6 +258,16 @@ app.include_router(review_listings.router)
 # Security endpoints (status, unlock)
 app.include_router(get_security_router())
 
+# MCP remote endpoint (SSE transport for Claude Desktop / remote clients)
+try:
+    from backend.api.mcp_mount import create_mcp_sse_app
+    mcp_sse_app = create_mcp_sse_app()
+    if mcp_sse_app:
+        app.mount("/mcp", mcp_sse_app)
+        logging.getLogger(__name__).info("MCP SSE endpoint mounted at /mcp")
+except Exception as e:
+    logging.getLogger(__name__).warning(f"MCP SSE endpoint not available: {e}")
+
 @app.get("/")
 async def root():
     """Root endpoint"""

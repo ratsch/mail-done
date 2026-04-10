@@ -35,6 +35,14 @@ MCP_SKIP_SSL_VERIFY = os.getenv("MCP_SKIP_SSL_VERIFY", "false").lower() == "true
 # NOTE: These are READ FRESH when EmailAPIClient is instantiated, not at module import time
 # This ensures environment variables set by Cursor MCP are picked up correctly
 def _get_mcp_allowed_account():
+    # Check contextvar override first (set by SSE endpoint for per-connection isolation)
+    try:
+        from backend.api.mcp_mount import get_mcp_allowed_account_override
+        override = get_mcp_allowed_account_override()
+        if override:
+            return override
+    except ImportError:
+        pass  # Not running inside FastAPI — use env var
     return os.getenv("MCP_ALLOWED_ACCOUNT")  # e.g., "work"
 
 def _get_mcp_date_limit_days():
@@ -246,9 +254,12 @@ class EmailAPIClient:
                 return response.json()
                 
             except httpx.HTTPStatusError as e:
-                # 404 is expected in some cases (e.g., sender stats for domains)
                 if e.response.status_code == 404:
                     logger.debug(f"API 404: {endpoint} - {e.response.text}")
+                elif e.response.status_code == 429:
+                    retry_after = e.response.headers.get("Retry-After", "60")
+                    logger.warning(f"Rate limited on {endpoint}: retry after {retry_after}s")
+                    return {"error": f"Rate limited. Please wait {retry_after} seconds before retrying.", "retry_after": int(retry_after)}
                 else:
                     logger.error(f"API error {e.response.status_code}: {e.response.text}")
                 return {"error": f"API error: {e.response.status_code}", "details": e.response.text}
@@ -1871,3 +1882,118 @@ class EmailAPIClient:
         """
         result = await self._request("GET", "/collections")
         return result
+
+    async def submit_review(self, email_id: str, rating: int, comment: str = None) -> Dict[str, Any]:
+        """Submit or update a review for an application."""
+        data = {"rating": rating}
+        if comment:
+            data["comment"] = comment
+        return await self._request("POST", f"/applications/{email_id}/review", json_data=data)
+
+    async def make_decision(self, email_id: str, decision: str, notes: str = None) -> Dict[str, Any]:
+        """Make a final decision on an application."""
+        data = {"decision": decision}
+        if notes:
+            data["notes"] = notes
+        return await self._request("POST", f"/admin/applications/{email_id}/decision", json_data=data)
+
+    async def mark_not_application(self, email_id: str, is_not_application: bool, reason: str = None) -> Dict[str, Any]:
+        """Mark an email as not-an-application."""
+        data = {"is_not_application": is_not_application}
+        if reason:
+            data["reason"] = reason
+        return await self._request("PATCH", f"/admin/applications/{email_id}/is-not-application", json_data=data)
+
+    async def export_applications(self, export_format: str = "excel", category: str = None,
+                                   min_recommendation_score: int = None, exclude_pii: bool = False) -> Dict[str, Any]:
+        """Export applications to Excel or CSV. Returns file saved to cache dir."""
+        params = {"format": export_format, "exclude_pii": str(exclude_pii).lower()}
+        if category:
+            params["category"] = category
+        if min_recommendation_score:
+            params["min_recommendation_score"] = str(min_recommendation_score)
+
+        # This endpoint returns binary (Excel/CSV), not JSON.
+        # Use _request_binary which handles auth (signing or API key) correctly.
+        return await self._request_binary("GET", "/applications/export", params=params,
+                                          filename=f"applications_export.{'xlsx' if export_format == 'excel' else 'csv'}")
+
+    # ── Property listing methods ────────────────────────────────────────────
+
+    async def list_property_listings(self, **kwargs) -> Dict[str, Any]:
+        """List property listings with filters."""
+        params = {k: v for k, v in kwargs.items() if v is not None}
+        return await self._request("GET", "/listings", params=params)
+
+    async def get_listing_details(self, listing_id: str) -> Dict[str, Any]:
+        """Get full details of a property listing."""
+        return await self._request("GET", f"/listings/{listing_id}")
+
+    async def update_listing(self, listing_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Update property listing fields."""
+        return await self._request("PATCH", f"/listings/{listing_id}", json_data=fields)
+
+    async def submit_listing_review(self, listing_id: str, rating: int, comment: str = None) -> Dict[str, Any]:
+        """Submit a review for a property listing."""
+        data = {"rating": rating}
+        if comment:
+            data["comment"] = comment
+        return await self._request("POST", f"/listings/{listing_id}/review", json_data=data)
+
+    async def record_listing_action(self, listing_id: str, action: str, notes: str = None) -> Dict[str, Any]:
+        """Record an action on a property listing."""
+        data = {"action": action}
+        if notes:
+            data["notes"] = notes
+        return await self._request("POST", f"/listings/{listing_id}/actions", json_data=data)
+
+    async def _request_binary(
+        self,
+        method: str,
+        endpoint: str,
+        params: Dict[str, Any] = None,
+        filename: str = "download",
+    ) -> Dict[str, Any]:
+        """Make authenticated HTTP request expecting binary response (not JSON).
+
+        Saves the response body to the MCP file cache directory.
+        Uses the same auth flow (signing or API key) as _request().
+        """
+        import tempfile
+        url = urljoin(self.base_url + "/", endpoint.lstrip('/'))
+
+        # Build signing path
+        signing_path = "/" + endpoint.lstrip('/')
+        if params:
+            query = urlencode(params)
+            signing_path = f"{signing_path}?{query}"
+
+        # Build headers with auth
+        headers = dict(self.headers)
+        if self._use_signing:
+            auth_headers = self._sign_request(method.upper(), signing_path)
+            headers.update(auth_headers)
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0, verify=not MCP_SKIP_SSL_VERIFY) as client:
+                response = await client.request(method, url, params=params, headers=headers)
+                response.raise_for_status()
+
+                cache_dir = os.getenv("MCP_FILE_CACHE_DIR", tempfile.gettempdir())
+                os.makedirs(cache_dir, exist_ok=True)
+                filepath = os.path.join(cache_dir, filename)
+
+                with open(filepath, "wb") as f:
+                    f.write(response.content)
+
+                return {
+                    "success": True,
+                    "file_path": filepath,
+                    "filename": filename,
+                    "size_bytes": len(response.content),
+                    "message": f"Exported to {filepath}",
+                }
+        except httpx.HTTPStatusError as e:
+            return {"success": False, "error": f"API error: {e.response.status_code}", "details": e.response.text}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
