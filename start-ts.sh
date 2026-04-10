@@ -24,5 +24,5 @@ tailscale serve --bg ${PORT:-8000}
 # Run database migrations
 poetry run alembic upgrade head
 
-# Start the API
-exec poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Drop privileges and start the API
+exec gosu appuser poetry run uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}

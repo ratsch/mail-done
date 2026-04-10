@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \
     curl \
+    gosu \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,8 +30,12 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false \
     && poetry install --only main --no-root --no-interaction --no-ansi
 
+# Create non-root app user
+RUN useradd -r -s /usr/sbin/nologin -d /app appuser \
+    && chown -R appuser:appuser /app
+
 # Copy application code
-COPY . .
+COPY --chown=appuser:appuser . .
 
 # Create startup script
 COPY start-ts.sh /start.sh
