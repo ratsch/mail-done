@@ -754,30 +754,42 @@ class HouzyClient:
         # Check if already in account
         existing = await self._find_property_by_address(full_address, plz)
         if existing:
-            # For apartments: the existing property must have the correct
-            # realEstateType UUID, otherwise the valuation endpoint returns
-            # calculationState="None" with no prediction. Delete and re-create
-            # if the existing one was made before the apartment-UUID fix.
+            # The existing Houzy property must match the requested type,
+            # otherwise the valuation endpoint returns calculationState="None"
+            # or just wrong results. Recreate when there's a mismatch.
+            raw = existing.raw_data or {}
+            existing_building_type = raw.get("buildingType", {})
+            if isinstance(existing_building_type, dict):
+                existing_building_type_id = existing_building_type.get("id")
+            else:
+                existing_building_type_id = existing_building_type
+            existing_type_uuid = raw.get("typeUuid")
+
+            # Expected buildingType + typeUuid for the requested property_type
             if property_type in ("apartment", "multi_family"):
-                raw = existing.raw_data or {}
-                existing_type_uuid = raw.get("typeUuid")
-                if existing_type_uuid != self.APARTMENT_REAL_ESTATE_TYPE_UUID:
-                    logger.info(
-                        f"Existing Houzy property {existing.property_id[:8]} "
-                        f"has typeUuid={existing_type_uuid} — recreating with "
-                        f"apartment UUID to enable valuation"
-                    )
-                    try:
-                        await self.delete_property(existing.property_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete old Houzy property: {e}")
-                    existing = None
-                else:
-                    logger.info(
-                        f"Found existing Houzy property: "
-                        f"{existing.property_id[:8]} — {full_address}"
-                    )
-                    return await self.get_valuation(existing.property_id)
+                expected_bt = 1
+                expected_uuid = self.APARTMENT_REAL_ESTATE_TYPE_UUID
+            else:
+                expected_bt = 2  # EFH
+                expected_uuid = None  # Houses don't need a typeUuid
+
+            mismatch = (
+                existing_building_type_id != expected_bt
+                or existing_type_uuid != expected_uuid
+            )
+
+            if mismatch:
+                logger.info(
+                    f"Existing Houzy property {existing.property_id[:8]} "
+                    f"mismatch: buildingType={existing_building_type_id} "
+                    f"typeUuid={existing_type_uuid} — recreating as "
+                    f"{property_type} (buildingType={expected_bt})"
+                )
+                try:
+                    await self.delete_property(existing.property_id)
+                except Exception as e:
+                    logger.warning(f"Failed to delete old Houzy property: {e}")
+                existing = None
             else:
                 logger.info(
                     f"Found existing Houzy property: "
