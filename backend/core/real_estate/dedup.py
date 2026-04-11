@@ -54,33 +54,44 @@ def compute_dedup_hash(
     rooms: float = None,
 ) -> str:
     """
-    Compute dedup hash from available property attributes.
+    Compute dedup hash from stable property attributes.
 
     Strategy:
-    - If address + PLZ known → strong hash (address-based)
-    - If only PLZ + price + sqm + rooms → weak hash (attribute-based)
-    - The hash is stored on PropertyListing.dedup_hash for fast lookups
+    - PRIMARY: hash on (plz, price, rooms, sqm) — these are the most
+      consistently extracted across email digests, even when address
+      detail varies between notifications. Two ingestions of the same
+      property (e.g., one with "Förrlibuckstrasse 227", another with
+      just "8005 Zürich") produce the SAME hash and dedup correctly.
+      Requires at least 3 of these fields populated.
+    - FALLBACK: if too few attributes are known, hash on (plz,
+      normalized_address). Used "addr"/"attr" prefixes so the two
+      hash families never collide.
 
     Returns:
         16-char hex hash string
     """
-    parts = [str(plz or "")]
+    fields = [plz, price, rooms, sqm]
+    non_null = sum(1 for f in fields if f is not None and str(f).strip())
 
-    # Build full address from components if not provided
-    full_addr = address
-    if not full_addr and street:
-        full_addr = f"{street} {street_nr or ''}".strip()
-
-    if full_addr:
-        # Strong dedup: address-based
-        parts.append(normalize_swiss_address(full_addr))
+    if non_null >= 3:
+        # Primary: stable attribute hash, robust to address variation
+        parts = [
+            "attr",
+            str(plz or "").strip(),
+            str(price or "").strip(),
+            str(rooms or "").strip(),
+            str(sqm or "").strip(),
+        ]
     else:
-        # Weak dedup: attribute-based (less reliable — same specs ≠ same property)
-        parts.extend([
-            str(price or ""),
-            str(sqm or ""),
-            str(rooms or ""),
-        ])
+        # Fallback: address-based hash for sparse data
+        full_addr = address
+        if not full_addr and street:
+            full_addr = f"{street} {street_nr or ''}".strip()
+        parts = [
+            "addr",
+            str(plz or "").strip(),
+            normalize_swiss_address(full_addr or ""),
+        ]
 
     key = "|".join(parts)
     return hashlib.sha256(key.encode()).hexdigest()[:16]
