@@ -144,6 +144,13 @@ class HouzyClient:
     MIN_REQUEST_INTERVAL = 3.0
     SESSION_CACHE_DIR = Path.home() / ".cache" / "houzy-client"
 
+    # realEstateType UUID for Eigentumswohnung / apartment. Without this,
+    # the `finance/current-market-value` endpoint returns
+    # calculationState="None" and no prediction for apartments. Recovered
+    # from the single working apartment valuation in the cache
+    # (market_value_dfbddad5.json).
+    APARTMENT_REAL_ESTATE_TYPE_UUID = "a2af1c4a-9739-4807-a048-92920f59e10b"
+
     def __init__(self, email: str = None, password: str = None):
         self.email = email or os.getenv("PORTAL_HOUZY_EMAIL")
         self.password = password or os.getenv("PORTAL_HOUZY_PASSWORD")
@@ -415,18 +422,24 @@ class HouzyClient:
         roof_type = open_data.get("roofType", "flatroof") if isinstance(open_data, dict) else "flatroof"
         construction_year = year_built or (open_data.get("constructionYear", 2000) if isinstance(open_data, dict) else 2000)
 
-        # Map property_type to Houzy buildingType
+        # Map property_type to Houzy buildingType + realEstateType.
         # From API observations:
-        #   1 = MFH (Mehrfamilienhaus / apartment building / STWE)
-        #   2 = EFH (Einfamilienhaus / single-family house)
-        # For apartments/STWE, MUST use buildingType=1 AND set condominium fields
+        #   buildingType 1 = MFH (Mehrfamilienhaus / apartment building / STWE)
+        #   buildingType 2 = EFH (Einfamilienhaus / single-family house)
+        # CRITICAL: for apartments, `realEstateType` MUST be set to the
+        # Eigentumswohnung/STWE UUID, otherwise the `finance/current-market-
+        # value` endpoint returns calculationState="None" with no prediction.
+        # The UUID was recovered from a working valuation
+        # (market_value_dfbddad5.json: realEstateType=a2af1c4a-...).
         if property_type in ("apartment", "multi_family"):
             building_type = 1
+            real_estate_type = self.APARTMENT_REAL_ESTATE_TYPE_UUID
             # condominiumPositionTypeId: floor position (1=EG, 2=OG, 3=DG, etc.)
             condo_position = max(1, floor + 1) if floor is not None else 2  # 2 = OG (Obergeschoss)
             condo_types = []
         else:
             building_type = 2  # EFH
+            real_estate_type = None  # Houses don't need typeUuid
             condo_position = None
             condo_types = None
 
@@ -451,7 +464,7 @@ class HouzyClient:
             "constructionYear": construction_year,
             "livingSpace": living_area_sqm,
             "numberOfFloors": num_floors,
-            "realEstateType": None,  # Let Houzy determine
+            "realEstateType": real_estate_type,
             "roofType": roof_type,
             "standard": int(ausbaustandard),
             "addOrBrowseProperties": "AddObject",
@@ -741,8 +754,36 @@ class HouzyClient:
         # Check if already in account
         existing = await self._find_property_by_address(full_address, plz)
         if existing:
-            logger.info(f"Found existing Houzy property: {existing.property_id[:8]} — {full_address}")
-            return await self.get_valuation(existing.property_id)
+            # For apartments: the existing property must have the correct
+            # realEstateType UUID, otherwise the valuation endpoint returns
+            # calculationState="None" with no prediction. Delete and re-create
+            # if the existing one was made before the apartment-UUID fix.
+            if property_type in ("apartment", "multi_family"):
+                raw = existing.raw_data or {}
+                existing_type_uuid = raw.get("typeUuid")
+                if existing_type_uuid != self.APARTMENT_REAL_ESTATE_TYPE_UUID:
+                    logger.info(
+                        f"Existing Houzy property {existing.property_id[:8]} "
+                        f"has typeUuid={existing_type_uuid} — recreating with "
+                        f"apartment UUID to enable valuation"
+                    )
+                    try:
+                        await self.delete_property(existing.property_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete old Houzy property: {e}")
+                    existing = None
+                else:
+                    logger.info(
+                        f"Found existing Houzy property: "
+                        f"{existing.property_id[:8]} — {full_address}"
+                    )
+                    return await self.get_valuation(existing.property_id)
+            else:
+                logger.info(
+                    f"Found existing Houzy property: "
+                    f"{existing.property_id[:8]} — {full_address}"
+                )
+                return await self.get_valuation(existing.property_id)
 
         # Create new
         property_id = await self.create_property(
