@@ -126,13 +126,21 @@ class ListingScraper:
                     listings.extend(parsed)
                     return listings
 
-        # For other sources: extract URLs from email and create stub listings
+        # For other sources: extract URLs from email and create stub listings.
+        # Resolve tracking URLs (SendGrid, Mailjet, etc.) IMMEDIATELY while
+        # they're still fresh — these tokens expire, so storing the wrapper
+        # would prevent any later scrape attempt from succeeding.
         urls = extract_listing_urls_from_email(email_body)
         if urls:
             logger.info(f"Found {len(urls)} listing URLs in email (source: {source})")
             for url in urls:
+                resolved_url = await resolve_tracking_url(url)
+                if resolved_url != url:
+                    logger.info(
+                        f"  resolved tracking URL → {resolved_url[:80]}"
+                    )
                 listings.append(ScrapedListing(
-                    listing_url=url,
+                    listing_url=resolved_url,
                     listing_source=source or "unknown",
                 ))
 
