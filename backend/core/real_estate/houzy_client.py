@@ -144,11 +144,18 @@ class HouzyClient:
     MIN_REQUEST_INTERVAL = 3.0
     SESSION_CACHE_DIR = Path.home() / ".cache" / "houzy-client"
 
-    # realEstateType UUID for Eigentumswohnung / apartment. Without this,
-    # the `finance/current-market-value` endpoint returns
-    # calculationState="None" and no prediction for apartments. Recovered
-    # from the single working apartment valuation in the cache
-    # (market_value_dfbddad5.json).
+    # realEstateType UUID that Houzy actually uses for computing
+    # valuations. Empirically verified: EVERY successful market-value
+    # response in the cache has realEstateType set to this UUID, and
+    # every failing one has realEstateType=null. Applies to both
+    # apartments and detached houses — confirmed by manually
+    # recreating a Klosters house in the Houzy UI, which resulted in
+    # buildingType=1 + typeUuid=<this UUID> and a working valuation.
+    #
+    # The name "APARTMENT" is a misnomer but kept for backwards-
+    # compatibility with earlier commits. In reality this is Houzy's
+    # default "individually-owned residential property" type (STWE
+    # umbrella — covers condos AND single-family homes).
     APARTMENT_REAL_ESTATE_TYPE_UUID = "a2af1c4a-9739-4807-a048-92920f59e10b"
 
     def __init__(self, email: str = None, password: str = None):
@@ -422,26 +429,22 @@ class HouzyClient:
         roof_type = open_data.get("roofType", "flatroof") if isinstance(open_data, dict) else "flatroof"
         construction_year = year_built or (open_data.get("constructionYear", 2000) if isinstance(open_data, dict) else 2000)
 
-        # Map property_type to Houzy buildingType + realEstateType.
-        # From API observations:
-        #   buildingType 1 = MFH (Mehrfamilienhaus / apartment building / STWE)
-        #   buildingType 2 = EFH (Einfamilienhaus / single-family house)
-        # CRITICAL: for apartments, `realEstateType` MUST be set to the
-        # Eigentumswohnung/STWE UUID, otherwise the `finance/current-market-
-        # value` endpoint returns calculationState="None" with no prediction.
-        # The UUID was recovered from a working valuation
-        # (market_value_dfbddad5.json: realEstateType=a2af1c4a-...).
-        if property_type in ("apartment", "multi_family"):
-            building_type = 1
-            real_estate_type = self.APARTMENT_REAL_ESTATE_TYPE_UUID
-            # condominiumPositionTypeId: floor position (1=EG, 2=OG, 3=DG, etc.)
-            condo_position = max(1, floor + 1) if floor is not None else 2  # 2 = OG (Obergeschoss)
-            condo_types = []
-        else:
-            building_type = 2  # EFH
-            real_estate_type = None  # Houses don't need typeUuid
-            condo_position = None
-            condo_types = None
+        # CRITICAL: Houzy's valuation endpoint only returns a prediction
+        # when the property has buildingType=1 AND realEstateType set to
+        # the STWE/EFH UUID — this is true for BOTH apartments and single-
+        # family houses. Empirically verified by comparing every successful
+        # vs failing market-value response in the cache, and by manually
+        # recreating a Klosters house in the Houzy UI (which results in
+        # exactly this combination).
+        #
+        # The previous code used buildingType=2 for houses, which produced
+        # calculationState="None" every time for rural addresses.
+        building_type = 1
+        real_estate_type = self.APARTMENT_REAL_ESTATE_TYPE_UUID
+        # condominiumPositionTypeId: floor position (1=EG, 2=OG, 3=DG, etc.)
+        # For houses the floor is usually 0/EG; apartments can be higher.
+        condo_position = max(1, floor + 1) if floor is not None else 2  # 2 = OG
+        condo_types = []
 
         # Step 2: Create the property
         create_payload = {
@@ -754,9 +757,10 @@ class HouzyClient:
         # Check if already in account
         existing = await self._find_property_by_address(full_address, plz)
         if existing:
-            # The existing Houzy property must match the requested type,
-            # otherwise the valuation endpoint returns calculationState="None"
-            # or just wrong results. Recreate when there's a mismatch.
+            # The existing Houzy property must have the STWE/EFH pattern
+            # (buildingType=1 + typeUuid=<apartment UUID>) to produce a
+            # valid valuation — this applies to BOTH apartments and houses.
+            # Delete + recreate on any mismatch.
             raw = existing.raw_data or {}
             existing_building_type = raw.get("buildingType", {})
             if isinstance(existing_building_type, dict):
@@ -765,13 +769,8 @@ class HouzyClient:
                 existing_building_type_id = existing_building_type
             existing_type_uuid = raw.get("typeUuid")
 
-            # Expected buildingType + typeUuid for the requested property_type
-            if property_type in ("apartment", "multi_family"):
-                expected_bt = 1
-                expected_uuid = self.APARTMENT_REAL_ESTATE_TYPE_UUID
-            else:
-                expected_bt = 2  # EFH
-                expected_uuid = None  # Houses don't need a typeUuid
+            expected_bt = 1
+            expected_uuid = self.APARTMENT_REAL_ESTATE_TYPE_UUID
 
             mismatch = (
                 existing_building_type_id != expected_bt
