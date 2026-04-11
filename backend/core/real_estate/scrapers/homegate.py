@@ -41,6 +41,20 @@ class HomegateScraper(BaseScraper):
         finally:
             await page.close()
 
+    # Markers that indicate the start of the email footer / signature block.
+    # Anything after these is marketing/legal text, not listing content — and
+    # contains the SMG HQ address ("Thurgauerstrasse 36, 8050 Zurich") which
+    # the address regex would otherwise misattribute to the last listing.
+    FOOTER_MARKERS = (
+        "SMG Swiss Marketplace Group",
+        "Verwalten Sie Ihre Suchaufträge",
+        "Manage your alerts",
+        "Manage your search subscriptions",
+        "Vous recevez ce message",
+        "Unsubscribe",
+        "Abbestellen",
+    )
+
     def parse_from_email(self, email_body: str, email_subject: str = "") -> List[ScrapedListing]:
         """
         Parse multiple listings from a Homegate digest email.
@@ -48,6 +62,17 @@ class HomegateScraper(BaseScraper):
         Each listing block has: price, PLZ+municipality, rooms, area, link.
         """
         listings = []
+
+        # Strip the email footer before block-splitting, otherwise the last
+        # block extends to end-of-body and the address regex picks up the
+        # SMG company address from the footer.
+        footer_pos = -1
+        for marker in self.FOOTER_MARKERS:
+            pos = email_body.find(marker)
+            if pos >= 0 and (footer_pos < 0 or pos < footer_pos):
+                footer_pos = pos
+        if footer_pos > 0:
+            email_body = email_body[:footer_pos]
 
         # Split into blocks by price line
         blocks = re.split(r'(?=(?:CHF\s|Preis auf Anfrage|Price on request))', email_body)
