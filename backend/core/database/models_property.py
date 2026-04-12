@@ -369,6 +369,7 @@ class PropertyEmail(Base):
     #   "other"
     relevance_score = Column(Float, nullable=True)        # 0-1 from vector search (NULL if manual)
     linked_by = Column(String, default="auto")            # "auto" or "manual"
+    validated = Column(Boolean, nullable=True)            # NULL=not checked, True=LLM confirmed, False=irrelevant
     linked_at = Column(DateTime, default=func.now())
 
     listing = relationship("PropertyListing", back_populates="linked_emails")

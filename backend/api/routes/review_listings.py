@@ -1420,6 +1420,7 @@ def _build_detail_response(
         .filter(PropertyEmail.email_type.in_([
             "agent_reply", "our_message", "inquiry_sent", "bank", "follow_up",
         ]))
+        .filter(or_(PropertyEmail.validated == True, PropertyEmail.validated.is_(None)))
         .order_by(Email.date.desc())
         .limit(50)
         .all()
@@ -1976,6 +1977,7 @@ async def list_listing_emails(
         .filter(PropertyEmail.email_type.in_([
             "agent_reply", "our_message", "inquiry_sent", "bank", "follow_up",
         ]))
+        .filter(or_(PropertyEmail.validated == True, PropertyEmail.validated.is_(None)))
         .order_by(Email.date.desc())
         .limit(100)
         .all()
