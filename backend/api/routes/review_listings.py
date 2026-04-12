@@ -128,25 +128,28 @@ def _record_action_internal(
 
 
 def _audit(db: Session, user_id: str, entity_id: str, action_type: str, **details):
-    """Best-effort audit log — never raises.
+    """Best-effort audit log — never raises, never poisons the session.
 
     The audit_log table has a FK on email_id → emails.id. Property listing IDs
-    aren't in the emails table, so the INSERT will fail with FK violation.
-    We use a SAVEPOINT so the failure doesn't roll back the main transaction.
-
-    Note: we don't call log_audit_event() because it does its own
-    db.commit()/db.rollback() which would break out of the savepoint.
+    aren't in the emails table, so the INSERT will always fail with FK violation.
+    We silently skip — PropertyAction is the real audit trail for listings.
     """
-    from backend.api.review_middleware import AuditLog
+    from backend.core.database.models import Email
     from uuid import UUID
     try:
-        user_uuid = UUID(user_id) if isinstance(user_id, str) else user_id
         entity_uuid = UUID(entity_id) if isinstance(entity_id, str) else entity_id
     except (ValueError, AttributeError):
         return
 
+    # Check if entity_id is an email (audit works) or a listing (audit will FK-fail)
+    # Quick check: if it's not in the emails table, skip entirely
+    exists = db.query(Email.id).filter(Email.id == entity_uuid).first()
+    if not exists:
+        return  # listing ID, not email ID — skip audit silently
+
+    from backend.api.review_middleware import AuditLog
     try:
-        nested = db.begin_nested()  # SAVEPOINT
+        user_uuid = UUID(user_id) if isinstance(user_id, str) else user_id
         audit = AuditLog(
             user_id=user_uuid,
             email_id=entity_uuid,
@@ -154,9 +157,12 @@ def _audit(db: Session, user_id: str, entity_id: str, action_type: str, **detail
             action_details=details or {},
         )
         db.add(audit)
-        db.flush()  # trigger FK check within savepoint
+        db.flush()
     except Exception:
-        pass  # FK violation expected for listing IDs — savepoint auto-rolls back
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 async def _houzy_refetch(
