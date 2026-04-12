@@ -267,6 +267,24 @@ class SourceResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PropertyEmailResponse(BaseModel):
+    """Email linked to a property listing."""
+    id: str
+    email_type: str               # "agent_reply", "inquiry_sent", "our_message", "bank", etc.
+    from_address: str
+    from_name: Optional[str] = None
+    to_addresses: Optional[List[str]] = None
+    subject: str
+    date: Optional[datetime] = None
+    body_preview: str              # First ~500 chars of body_markdown
+    has_attachments: bool = False
+    attachment_count: int = 0
+    relevance_score: Optional[float] = None
+    linked_by: str = "auto"
+
+    model_config = {"from_attributes": True}
+
+
 class CollectionResponse(BaseModel):
     """Property collection response."""
     id: str
@@ -498,6 +516,9 @@ class ListingDetailResponse(ListingListItem):
 
     # Documents
     documents: List[DocumentResponse] = []
+
+    # Linked emails (correspondence with agents, bank, etc.)
+    emails: List[PropertyEmailResponse] = []
 
 
 class SharedListingResponse(ListingDetailResponse):

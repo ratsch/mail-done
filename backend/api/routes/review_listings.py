@@ -21,7 +21,7 @@ import logging
 import io
 
 from backend.core.database import get_db
-from backend.core.database.models import LabMember
+from backend.core.database.models import LabMember, Email
 from backend.core.database.models_property import (
     PropertyListing, PropertyListingSource, PropertyReview, PropertyAction,
     PropertyPrivateNote, PropertyDueDiligence, PropertyDocument, PropertyEmail,
@@ -35,6 +35,7 @@ from backend.api.listing_schemas import (
     ListingUpdateRequest, PrivateNotesRequest,
     DueDiligenceUpdateRequest, DueDiligenceItemResponse,
     AddDocumentRequest, DocumentResponse, SourceResponse,
+    PropertyEmailResponse,
     CreateCollectionRequest, AddCollectionItemRequest,
     CollectionResponse, CollectionDetailResponse,
     HouzyUpdateRequest, RequestInfoRequest, BatchActionRequest,
@@ -1411,6 +1412,39 @@ def _build_detail_response(
         for d in doc_rows
     ]
 
+    # Linked emails (correspondence with agents, bank, etc.)
+    email_rows = (
+        db.query(PropertyEmail, Email)
+        .join(Email, PropertyEmail.email_id == Email.id)
+        .filter(PropertyEmail.listing_id == listing.id)
+        .filter(PropertyEmail.email_type.in_([
+            "agent_reply", "our_message", "inquiry_sent", "bank", "follow_up",
+        ]))
+        .order_by(Email.date.desc())
+        .limit(50)
+        .all()
+    )
+    emails = []
+    for pe, email in email_rows:
+        body = email.body_markdown or email.body_text or ""
+        preview = body[:500].strip()
+        if len(body) > 500:
+            preview += "..."
+        emails.append(PropertyEmailResponse(
+            id=str(pe.id),
+            email_type=pe.email_type,
+            from_address=email.from_address or "",
+            from_name=email.from_name,
+            to_addresses=email.to_addresses if isinstance(email.to_addresses, list) else None,
+            subject=email.subject or "",
+            date=email.date,
+            body_preview=preview,
+            has_attachments=email.has_attachments or False,
+            attachment_count=email.attachment_count or 0,
+            relevance_score=pe.relevance_score,
+            linked_by=pe.linked_by or "auto",
+        ))
+
     # Sources
     source_rows = db.query(PropertyListingSource).filter(
         PropertyListingSource.listing_id == listing.id
@@ -1533,6 +1567,7 @@ def _build_detail_response(
         due_diligence_answered=dd_answered,
         due_diligence_deal_breakers=dd_deal_breakers,
         documents=documents,
+        emails=emails,
     )
 
 
@@ -1922,6 +1957,50 @@ async def list_documents(
         )
         for d in docs
     ]
+
+
+# ---- Linked Emails ---------------------------------------------------------
+
+@router.get("/{listing_id}/emails")
+async def list_listing_emails(
+    listing_id: str,
+    current_user: LabMember = Depends(get_current_reviewer_hybrid),
+    db: Session = Depends(get_db),
+):
+    """List emails linked to a listing (correspondence with agents, bank, etc.)."""
+    listing = _get_listing_or_404(db, listing_id)
+    rows = (
+        db.query(PropertyEmail, Email)
+        .join(Email, PropertyEmail.email_id == Email.id)
+        .filter(PropertyEmail.listing_id == listing.id)
+        .filter(PropertyEmail.email_type.in_([
+            "agent_reply", "our_message", "inquiry_sent", "bank", "follow_up",
+        ]))
+        .order_by(Email.date.desc())
+        .limit(100)
+        .all()
+    )
+    result = []
+    for pe, email in rows:
+        body = email.body_markdown or email.body_text or ""
+        preview = body[:500].strip()
+        if len(body) > 500:
+            preview += "..."
+        result.append(PropertyEmailResponse(
+            id=str(pe.id),
+            email_type=pe.email_type,
+            from_address=email.from_address or "",
+            from_name=email.from_name,
+            to_addresses=email.to_addresses if isinstance(email.to_addresses, list) else None,
+            subject=email.subject or "",
+            date=email.date,
+            body_preview=preview,
+            has_attachments=email.has_attachments or False,
+            attachment_count=email.attachment_count or 0,
+            relevance_score=pe.relevance_score,
+            linked_by=pe.linked_by or "auto",
+        ))
+    return result
 
 
 # ---- Manual Edit -----------------------------------------------------------
