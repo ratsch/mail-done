@@ -1427,8 +1427,8 @@ def _build_detail_response(
     emails = []
     for pe, email in email_rows:
         body = email.body_markdown or email.body_text or ""
-        preview = body[:500].strip()
-        if len(body) > 500:
+        preview = body[:5000].strip()
+        if len(body) > 5000:
             preview += "..."
         emails.append(PropertyEmailResponse(
             id=str(pe.id),
@@ -1983,8 +1983,8 @@ async def list_listing_emails(
     result = []
     for pe, email in rows:
         body = email.body_markdown or email.body_text or ""
-        preview = body[:500].strip()
-        if len(body) > 500:
+        preview = body[:5000].strip()
+        if len(body) > 5000:
             preview += "..."
         result.append(PropertyEmailResponse(
             id=str(pe.id),
