@@ -181,6 +181,7 @@ class PropertyListing(Base):
     private_notes = relationship("PropertyPrivateNote", back_populates="listing", cascade="all, delete-orphan")
     due_diligence = relationship("PropertyDueDiligence", back_populates="listing", cascade="all, delete-orphan")
     documents = relationship("PropertyDocument", back_populates="listing", cascade="all, delete-orphan")
+    linked_emails = relationship("PropertyEmail", back_populates="listing", cascade="all, delete-orphan", order_by="PropertyEmail.linked_at.desc()")
     collection_items = relationship("PropertyCollectionItem", back_populates="listing", cascade="all, delete-orphan")
     share_tokens = relationship("PropertyShareToken", back_populates="listing", cascade="all, delete-orphan")
 
@@ -337,6 +338,46 @@ class PropertyDocument(Base):
 
     __table_args__ = (
         Index("ix_property_documents_listing", "listing_id"),
+    )
+
+
+# =============================================================================
+# EMAILS: Link correspondence emails to listings
+# =============================================================================
+
+class PropertyEmail(Base):
+    """Links an email to a property listing.
+
+    Captures the full conversation about a property: homegate notifications,
+    our inquiry confirmations, agent replies with docs, our follow-up Q&A,
+    and bank correspondence about financing.
+    """
+    __tablename__ = "property_emails"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    listing_id = Column(UUID(as_uuid=True), ForeignKey("property_listings.id"), nullable=False)
+    email_id = Column(UUID(as_uuid=True), ForeignKey("emails.id"), nullable=False)
+    email_type = Column(String, nullable=False)
+    # Types:
+    #   "notification"  — homegate/remax alert that created the listing
+    #   "inquiry_sent"  — our contact request via homegate
+    #   "agent_reply"   — agent response (docs, info, viewing offer)
+    #   "our_message"   — our reply/follow-up to agent (questions, etc.)
+    #   "bank"          — bank correspondence (GKB mortgage, Tragbarkeit)
+    #   "follow_up"     — continued thread (either direction)
+    #   "marketing"     — broker proactive email (Ambühl Suchtreffer)
+    #   "other"
+    relevance_score = Column(Float, nullable=True)        # 0-1 from vector search (NULL if manual)
+    linked_by = Column(String, default="auto")            # "auto" or "manual"
+    linked_at = Column(DateTime, default=func.now())
+
+    listing = relationship("PropertyListing", back_populates="linked_emails")
+    email = relationship("Email")
+
+    __table_args__ = (
+        UniqueConstraint("listing_id", "email_id", name="uq_property_email"),
+        Index("ix_property_emails_listing", "listing_id"),
+        Index("ix_property_emails_email", "email_id"),
     )
 
 

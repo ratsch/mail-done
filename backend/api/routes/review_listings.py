@@ -24,7 +24,7 @@ from backend.core.database import get_db
 from backend.core.database.models import LabMember
 from backend.core.database.models_property import (
     PropertyListing, PropertyListingSource, PropertyReview, PropertyAction,
-    PropertyPrivateNote, PropertyDueDiligence, PropertyDocument,
+    PropertyPrivateNote, PropertyDueDiligence, PropertyDocument, PropertyEmail,
     PropertyCollection, PropertyCollectionItem, PropertyShareToken,
 )
 from backend.api.review_auth import get_current_reviewer_hybrid, get_current_admin_hybrid
