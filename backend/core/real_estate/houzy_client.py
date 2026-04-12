@@ -429,21 +429,20 @@ class HouzyClient:
         roof_type = open_data.get("roofType", "flatroof") if isinstance(open_data, dict) else "flatroof"
         construction_year = year_built or (open_data.get("constructionYear", 2000) if isinstance(open_data, dict) else 2000)
 
-        # CRITICAL: Houzy's valuation endpoint only returns a prediction
-        # when the property has buildingType=1 AND realEstateType set to
-        # the STWE/EFH UUID — this is true for BOTH apartments and single-
-        # family houses. Empirically verified by comparing every successful
-        # vs failing market-value response in the cache, and by manually
-        # recreating a Klosters house in the Houzy UI (which results in
-        # exactly this combination).
+        # Houzy buildingType mapping (verified by comparing manual UI entries
+        # vs code-created entries, April 2026):
+        #   buildingType=1 = MFH (Mehrfamilienhaus — the whole building)
+        #   buildingType=2 = individual unit (Eigentumswohnung / STWE / EFH)
         #
-        # The previous code used buildingType=2 for houses, which produced
-        # calculationState="None" every time for rural addresses.
-        building_type = 1
-        real_estate_type = self.APARTMENT_REAL_ESTATE_TYPE_UUID
-        # condominiumPositionTypeId: floor position (1=EG, 2=OG, 3=DG, etc.)
-        # For houses the floor is usually 0/EG; apartments can be higher.
-        condo_position = max(1, floor + 1) if floor is not None else 2  # 2 = OG
+        # For apartments/STWE: use buildingType=2, NO typeUuid, NO condoPosition.
+        # This is what the Houzy UI creates when you add an apartment manually.
+        # Using buildingType=1 + apartment UUID (the old approach) valued the
+        # ENTIRE building instead of the unit → inflated prices, 20% quality.
+        #
+        # For houses (EFH/detached): also buildingType=2, same as apartments.
+        building_type = 2
+        real_estate_type = None  # not needed for individual units
+        condo_position = None
         condo_types = []
 
         # Step 2: Create the property
@@ -462,17 +461,20 @@ class HouzyClient:
             "areaProperty": area_property,
             "buildingType": building_type,
             "condition": int(zustand),
-            "condominiumPositionTypeId": condo_position,
             "condominiumTypeIds": condo_types,
             "constructionYear": construction_year,
             "livingSpace": living_area_sqm,
             "numberOfFloors": num_floors,
-            "realEstateType": real_estate_type,
             "roofType": roof_type,
             "standard": int(ausbaustandard),
             "addOrBrowseProperties": "AddObject",
             "areaBase": area_base,
         }
+        # Only include these if set (Houzy UI omits them for individual units)
+        if real_estate_type:
+            create_payload["realEstateType"] = real_estate_type
+        if condo_position is not None:
+            create_payload["condominiumPositionTypeId"] = condo_position
 
         result = await self._post("/real-estate/create", json_data=create_payload)
         self._save_debug("create_response", result)
@@ -757,32 +759,21 @@ class HouzyClient:
         # Check if already in account
         existing = await self._find_property_by_address(full_address, plz)
         if existing:
-            # The existing Houzy property must have the STWE/EFH pattern
-            # (buildingType=1 + typeUuid=<apartment UUID>) to produce a
-            # valid valuation — this applies to BOTH apartments and houses.
-            # Delete + recreate on any mismatch.
+            # Existing property should be buildingType=2 (individual unit).
+            # If it's buildingType=1 (whole MFH — old wrong code), delete
+            # and recreate with the correct type.
             raw = existing.raw_data or {}
             existing_building_type = raw.get("buildingType", {})
             if isinstance(existing_building_type, dict):
                 existing_building_type_id = existing_building_type.get("id")
             else:
                 existing_building_type_id = existing_building_type
-            existing_type_uuid = raw.get("typeUuid")
 
-            expected_bt = 1
-            expected_uuid = self.APARTMENT_REAL_ESTATE_TYPE_UUID
-
-            mismatch = (
-                existing_building_type_id != expected_bt
-                or existing_type_uuid != expected_uuid
-            )
-
-            if mismatch:
+            if existing_building_type_id == 1:
                 logger.info(
                     f"Existing Houzy property {existing.property_id[:8]} "
-                    f"mismatch: buildingType={existing_building_type_id} "
-                    f"typeUuid={existing_type_uuid} — recreating as "
-                    f"{property_type} (buildingType={expected_bt})"
+                    f"has buildingType=1 (MFH/whole building) — recreating as "
+                    f"buildingType=2 (individual unit)"
                 )
                 try:
                     await self.delete_property(existing.property_id)
