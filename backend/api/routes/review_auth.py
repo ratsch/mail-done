@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from starlette.requests import Request as StarletteRequest
 from fastapi.responses import RedirectResponse, JSONResponse
 from starlette.responses import Response as StarletteResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -189,9 +190,10 @@ async def google_oauth_callback(
     ).first()
     
     if not lab_member:
-        # Check if user exists by email (might have been created manually or with different gsuite_id)
+        # Check if user exists by email (case-insensitive, since Google may
+        # return mixed-case while DB rows are sometimes lowercased)
         lab_member = db.query(LabMember).filter(
-            LabMember.email == email
+            func.lower(LabMember.email) == email.lower()
         ).first()
         
         if lab_member:

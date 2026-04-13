@@ -28,6 +28,7 @@ from google.auth.transport import requests
 from backend.core.signing.keys import base64_to_public_key
 from backend.core.signing.scopes import parse_scopes
 from backend.core.signing.ephemeral import ephemeral_registry
+from sqlalchemy import func
 from backend.api.review_auth import decode_jwt_token
 
 logger = logging.getLogger(__name__)
@@ -393,7 +394,7 @@ async def get_signed_user_info(
         db = next(get_db())
         try:
             member = db.query(LabMember).filter(
-                LabMember.email == user_email
+                func.lower(LabMember.email) == user_email.lower()
             ).first()
             
             if member:

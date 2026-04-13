@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import HTTPException, Security, status, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from google.oauth2 import id_token
 from google.auth.transport import requests
@@ -356,9 +357,9 @@ async def get_current_user_hybrid(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Look up LabMember by email
+    # Look up LabMember by email (case-insensitive)
     user = db.query(LabMember).filter(
-        LabMember.email == user_email
+        func.lower(LabMember.email) == user_email.lower()
     ).first()
     
     if not user:
@@ -491,7 +492,9 @@ def handle_failed_auth(email: str, db: Session, reason: str = "unknown"):
     """
     logger = logging.getLogger(__name__)
     
-    user = db.query(LabMember).filter(LabMember.email == email).first()
+    user = db.query(LabMember).filter(
+        func.lower(LabMember.email) == email.lower()
+    ).first()
     if not user:
         # User doesn't exist - log but don't reveal this to caller
         logger.info(f"Failed auth attempt for non-existent user (not revealing): reason={reason}")

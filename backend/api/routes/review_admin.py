@@ -83,8 +83,10 @@ async def create_user(
 ):
     """Add new lab member (admin only)."""
     try:
-        # Check if user already exists by email
-        existing = db.query(LabMember).filter(LabMember.email == user_data.email).first()
+        # Check if user already exists by email (case-insensitive)
+        existing = db.query(LabMember).filter(
+            func.lower(LabMember.email) == user_data.email.lower()
+        ).first()
         if existing:
             raise HTTPException(status_code=400, detail="User with this email already exists")
         
@@ -199,8 +201,10 @@ async def batch_create_users(
     
     for user_data in batch_data.users:
         try:
-            # Check if user already exists
-            existing = db.query(LabMember).filter(LabMember.email == user_data.email).first()
+            # Check if user already exists (case-insensitive)
+            existing = db.query(LabMember).filter(
+                func.lower(LabMember.email) == user_data.email.lower()
+            ).first()
             if existing:
                 results.append({
                     "email": user_data.email,
