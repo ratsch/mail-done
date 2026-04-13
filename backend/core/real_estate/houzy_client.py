@@ -453,10 +453,28 @@ class HouzyClient:
         if property_type == "apartment":
             building_type = 2
             real_estate_type = None
+            # condominiumPositionTypeId is REQUIRED for apartments (verified
+            # via HAR captures iterating all 4 positions, April 2026):
+            #   1 = Erdgeschoss (EG / ground floor)
+            #   2 = Obergeschoss (OG / upper floor)
+            #   3 = Dachgeschoss (DG / top floor under roof)
+            #   4 = Attikageschoss (penthouse / set-back attic floor)
+            if floor is None:
+                condo_position = 2  # default OG
+            elif floor == 0:
+                condo_position = 1  # EG
+            elif floor >= (num_floors or 99) - 1:
+                # Top floor or near-top → DG. Without num_floors hint, stay on OG.
+                condo_position = 3 if num_floors else 2
+            else:
+                condo_position = 2  # OG (middle floors)
+            # condominiumTypeIds: [1]=Terrassenwohnung, [2]=Maisonette, []=normal
+            condo_types = []
+            # For apartments numberOfFloors is the unit's own floors
+            # (1 = flat, 2+ = maisonette). Override open-data building floors.
+            num_floors = 1
         else:
-            # Detect subtype from description for house listings
             desc = (property_type or "").lower()
-            # Caller passes "house", "row_house", "semi_detached" etc.
             building_type = 1
             if "row" in desc or "reihen" in desc or "terrace" in desc:
                 real_estate_type = self.ROW_HOUSE_UUID
@@ -464,8 +482,22 @@ class HouzyClient:
                 real_estate_type = self.SEMI_DETACHED_HOUSE_UUID
             else:
                 real_estate_type = self.DETACHED_HOUSE_UUID
-        condo_position = None
-        condo_types = []
+            condo_position = None
+            condo_types = []
+
+        # Houzy's condition/standard are 1/3/5 scale (not 1/2/3):
+        #   1 = sanierungsreif / einfach
+        #   3 = intakt          / üblich
+        #   5 = neuwertig       / luxuriös
+        # Our inputs are 1-5 floats; map 1-2→1, 3-4→3, 5→5
+        def _to_houzy_scale(v):
+            if v is None: return 3
+            v = int(v)
+            if v <= 2: return 1
+            if v >= 5: return 5
+            return 3
+        condition_val = _to_houzy_scale(zustand)
+        standard_val = _to_houzy_scale(ausbaustandard)
 
         # Step 2: Create the property
         create_payload = {
@@ -482,13 +514,13 @@ class HouzyClient:
             },
             "areaProperty": area_property,
             "buildingType": building_type,
-            "condition": int(zustand),
+            "condition": condition_val,
             "condominiumTypeIds": condo_types,
             "constructionYear": construction_year,
             "livingSpace": living_area_sqm,
             "numberOfFloors": num_floors,
             "roofType": roof_type,
-            "standard": int(ausbaustandard),
+            "standard": standard_val,
             "addOrBrowseProperties": "AddObject",
             "areaBase": area_base,
         }
