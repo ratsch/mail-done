@@ -72,6 +72,18 @@ class PropertyListing(Base):
     has_garden_access = Column(Boolean, nullable=True)
     has_terrace = Column(Boolean, nullable=True)
 
+    # --- MFH / Scenario C fields ---
+    bruttorendite_pct = Column(Float, nullable=True)
+    annual_rental_income_chf = Column(Integer, nullable=True)
+    zoning_zone = Column(String(10), nullable=True)           # "W2","W3","W4","W5","K", etc.
+    ausnutzungsreserve_sqm = Column(Integer, nullable=True)
+    development_options = Column(JSON, nullable=True)          # ["aufstockung_vollgeschoss","attika",...]
+    denkmalschutz = Column(Boolean, nullable=True)
+    altlasten = Column(Boolean, nullable=True)
+    kernzone = Column(Boolean, nullable=True)
+    stwe_conversion_feasibility = Column(String(20), nullable=True)  # "likely","complex","blocked"
+    ideal_party_count = Column(Integer, nullable=True)
+
     # --- Financing ---
     is_zweitwohnung = Column(Boolean, nullable=True)
     is_baurecht = Column(Boolean, nullable=True)

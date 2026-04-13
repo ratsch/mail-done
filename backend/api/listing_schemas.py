@@ -415,6 +415,18 @@ class ListingListItem(BaseModel):
     terrace_orientation: Optional[str] = None
     sun_exposure_notes: Optional[str] = None
 
+    # MFH / Scenario C
+    bruttorendite_pct: Optional[float] = None
+    annual_rental_income_chf: Optional[int] = None
+    zoning_zone: Optional[str] = None
+    ausnutzungsreserve_sqm: Optional[int] = None
+    development_options: Optional[List[str]] = None
+    denkmalschutz: Optional[bool] = None
+    altlasten: Optional[bool] = None
+    kernzone: Optional[bool] = None
+    stwe_conversion_feasibility: Optional[str] = None
+    ideal_party_count: Optional[int] = None
+
     photo_urls: Optional[List[str]] = None
     first_seen: Optional[datetime] = None
     days_on_market: Optional[int] = None
