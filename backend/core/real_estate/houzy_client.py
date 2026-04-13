@@ -797,6 +797,8 @@ class HouzyClient:
                                year_built: int = 2000,
                                zustand: float = 3.0,
                                ausbaustandard: float = 3.0,
+                               floor: int = 1,
+                               delete_after: bool = True,
                                ) -> HouzyValuation:
         """
         End-to-end: find or create property and return valuation.
@@ -815,8 +817,16 @@ class HouzyClient:
         """
         full_address = f"{street} {nr}".strip()
 
-        # Check if already in account
-        existing = await self._find_property_by_address(full_address, plz)
+        # With delete_after=True (default), we don't check for existing entries —
+        # we create a fresh one each time, fetch valuation, then delete it.
+        # This keeps the Houzy website clean (no clutter) and avoids the
+        # multi-unit dedup problem (same address → different apartments all
+        # got the same valuation).
+        existing = None
+        if not delete_after:
+            existing = await self._find_property_by_address(
+                full_address, plz, rooms=rooms, living_area_sqm=living_area_sqm,
+            )
         if existing:
             # Existing property should be buildingType=2 (individual unit).
             # If it's buildingType=1 (whole MFH — old wrong code), delete
@@ -850,7 +860,7 @@ class HouzyClient:
         property_id = await self.create_property(
             street=street, nr=nr, plz=plz, municipality=municipality,
             property_type=property_type, living_area_sqm=living_area_sqm,
-            rooms=rooms, year_built=year_built,
+            rooms=rooms, year_built=year_built, floor=floor,
             zustand=zustand, ausbaustandard=ausbaustandard,
         )
 
@@ -873,15 +883,51 @@ class HouzyClient:
         # Fill address from our input since the valuation endpoint doesn't return it
         valuation.address = full_address
         valuation.plz = plz
+
+        # Delete the Houzy entry after fetching the valuation to keep the
+        # Houzy account clean. The valuation data is stored in our DB.
+        if delete_after and property_id:
+            try:
+                await self.delete_property(property_id)
+                valuation.property_id = None  # signal it's been deleted
+            except Exception as e:
+                logger.warning(f"Failed to delete Houzy entry {property_id[:8]} after valuation: {e}")
+
         return valuation
 
-    async def _find_property_by_address(self, address: str, plz: str) -> Optional[HouzyProperty]:
-        """Check if a property with this address exists in the account."""
+    async def _find_property_by_address(
+        self, address: str, plz: str,
+        rooms: Optional[float] = None,
+        living_area_sqm: Optional[int] = None,
+    ) -> Optional[HouzyProperty]:
+        """Check if a property matching this address+specs exists in the account.
+
+        For multi-unit buildings (same address, different apartments), requires
+        rooms AND living_area_sqm to match too — otherwise we'd reuse the same
+        Houzy entry for all units and they'd all get identical valuations.
+        """
         properties = await self.list_properties()
         addr_lower = address.lower().strip()
         for prop in properties:
-            if prop.plz == plz and addr_lower in prop.address.lower():
-                return prop
+            if prop.plz != plz or addr_lower not in prop.address.lower():
+                continue
+            # If specs provided, require they match too (tolerance: 0.5 rooms, 5 m²)
+            raw = prop.raw_data or {}
+            if rooms is not None:
+                prop_rooms = raw.get("rooms")
+                try:
+                    if prop_rooms is not None and abs(float(prop_rooms) - rooms) > 0.5:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            if living_area_sqm is not None:
+                prop_sqm = raw.get("areaLiving")
+                try:
+                    if prop_sqm is not None and abs(int(prop_sqm) - living_area_sqm) > 5:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            return prop
         return None
 
     # -------------------------------------------------------------------------
