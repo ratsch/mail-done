@@ -17,7 +17,7 @@ Encryption:
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, JSON, ForeignKey, Index, Date, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from datetime import datetime, timezone
 import uuid
 
@@ -720,6 +720,13 @@ class LabMember(Base):
         Index('ix_lab_members_role', 'role'),
         Index('ix_lab_members_is_active', 'is_active'),
     )
+
+    @validates('email')
+    def _lowercase_email(self, key, value):
+        # Emails are case-insensitive identifiers; normalize on assignment so
+        # the case-sensitive UNIQUE constraint on `email` can't accidentally
+        # admit duplicates like 'Foo@x' and 'foo@x'.
+        return value.lower() if isinstance(value, str) else value
 
 
 class ApplicationReview(Base):
