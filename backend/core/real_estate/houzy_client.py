@@ -156,7 +156,16 @@ class HouzyClient:
     # compatibility with earlier commits. In reality this is Houzy's
     # default "individually-owned residential property" type (STWE
     # umbrella — covers condos AND single-family homes).
-    APARTMENT_REAL_ESTATE_TYPE_UUID = "a2af1c4a-9739-4807-a048-92920f59e10b"
+    # Houzy realEstateType UUIDs for houses (from chunk-PS6R5IYI.js in Houzy SPA):
+    #   DETACHED_HOUSE (Freistehend EFH)
+    #   SEMI_DETACHED_HOUSE (Doppel-EFH)
+    #   ROW_HOUSE (Reihen-EFH)
+    # Apartments (STWE) don't use realEstateType — they use buildingType=2 + null.
+    DETACHED_HOUSE_UUID = "a2af1c4a-9739-4807-a048-92920f59e10b"
+    SEMI_DETACHED_HOUSE_UUID = "b18c0625-7d08-44f7-aedf-8289de25d575"
+    ROW_HOUSE_UUID = "e246ac3a-857f-4b13-9aa2-b370b4ad6f51"
+    # Legacy alias — was misnamed, actually maps to DETACHED_HOUSE
+    APARTMENT_REAL_ESTATE_TYPE_UUID = DETACHED_HOUSE_UUID
 
     def __init__(self, email: str = None, password: str = None):
         self.email = email or os.getenv("PORTAL_HOUZY_EMAIL")
@@ -429,19 +438,32 @@ class HouzyClient:
         roof_type = open_data.get("roofType", "flatroof") if isinstance(open_data, dict) else "flatroof"
         construction_year = year_built or (open_data.get("constructionYear", 2000) if isinstance(open_data, dict) else 2000)
 
-        # Houzy buildingType mapping (verified by comparing manual UI entries
-        # vs code-created entries, April 2026):
-        #   buildingType=1 = MFH (Mehrfamilienhaus — the whole building)
-        #   buildingType=2 = individual unit (Eigentumswohnung / STWE / EFH)
+        # Houzy buildingType + realEstateType mapping (verified via 2 HAR captures
+        # and chunk-PS6R5IYI.js in Houzy SPA, April 2026):
         #
-        # For apartments/STWE: use buildingType=2, NO typeUuid, NO condoPosition.
-        # This is what the Houzy UI creates when you add an apartment manually.
-        # Using buildingType=1 + apartment UUID (the old approach) valued the
-        # ENTIRE building instead of the unit → inflated prices, 20% quality.
+        # Apartments (STWE in MFH):
+        #   buildingType=2, realEstateType=null
         #
-        # For houses (EFH/detached): also buildingType=2, same as apartments.
-        building_type = 2
-        real_estate_type = None  # not needed for individual units
+        # Houses (whole building):
+        #   buildingType=1 + realEstateType:
+        #     - Freistehend EFH → DETACHED_HOUSE_UUID
+        #     - Doppel-EFH     → SEMI_DETACHED_HOUSE_UUID
+        #     - Reihen-EFH     → ROW_HOUSE_UUID
+        #   (MFH sold whole defaults to DETACHED treatment.)
+        if property_type == "apartment":
+            building_type = 2
+            real_estate_type = None
+        else:
+            # Detect subtype from description for house listings
+            desc = (property_type or "").lower()
+            # Caller passes "house", "row_house", "semi_detached" etc.
+            building_type = 1
+            if "row" in desc or "reihen" in desc or "terrace" in desc:
+                real_estate_type = self.ROW_HOUSE_UUID
+            elif "semi" in desc or "doppel" in desc:
+                real_estate_type = self.SEMI_DETACHED_HOUSE_UUID
+            else:
+                real_estate_type = self.DETACHED_HOUSE_UUID
         condo_position = None
         condo_types = []
 
