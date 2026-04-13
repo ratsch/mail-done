@@ -437,6 +437,11 @@ class HouzyClient:
         num_floors = open_data.get("numberOfFloors", 4) if isinstance(open_data, dict) else 4
         roof_type = open_data.get("roofType", "flatroof") if isinstance(open_data, dict) else "flatroof"
         construction_year = year_built or (open_data.get("constructionYear", 2000) if isinstance(open_data, dict) else 2000)
+        # Houzy rejects future years (max = current year). Cap future construction dates.
+        from datetime import datetime as _dt
+        _current_year = _dt.now().year
+        if construction_year and construction_year > _current_year:
+            construction_year = _current_year
 
         # Houzy buildingType + realEstateType mapping (verified via 2 HAR captures
         # and chunk-PS6R5IYI.js in Houzy SPA, April 2026):
