@@ -722,11 +722,17 @@ class LabMember(Base):
     )
 
     @validates('email')
-    def _lowercase_email(self, key, value):
+    def _normalize_email(self, key, value):
         # Emails are case-insensitive identifiers; normalize on assignment so
         # the case-sensitive UNIQUE constraint on `email` can't accidentally
-        # admit duplicates like 'Foo@x' and 'foo@x'.
-        return value.lower() if isinstance(value, str) else value
+        # admit duplicates like 'Foo@x' and 'foo@x'. Also strip surrounding
+        # whitespace from form-input.
+        # NOTE: @validates does NOT fire for Core inserts (session.execute(
+        # insert(...))), bulk_insert_mappings, bulk_save_objects, or raw SQL.
+        # If you ever add such a path for lab_members, normalize manually.
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
 
 class ApplicationReview(Base):
