@@ -139,6 +139,10 @@ async def unified_search(
                     date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
                 except Exception:
                     raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
+            # Date-only input = end-of-day (inclusive)
+            if date_to_dt.hour == 0 and date_to_dt.minute == 0 and date_to_dt.second == 0 \
+               and date_to_dt.microsecond == 0 and 'T' not in date_to and ' ' not in date_to:
+                date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
 
         # Create unified search service
         searcher = UnifiedSearchService(db)
@@ -367,7 +371,12 @@ async def search_emails(
                     date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
                 except Exception as e:
                     raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
-        
+            # Date-only input (no explicit time) = end-of-day (inclusive).
+            # Otherwise emails received after 00:00:00 on that day get dropped.
+            if date_to_dt.hour == 0 and date_to_dt.minute == 0 and date_to_dt.second == 0 \
+               and date_to_dt.microsecond == 0 and 'T' not in date_to and ' ' not in date_to:
+                date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+
         # Create hybrid search
         searcher = HybridSearch(db)
         
