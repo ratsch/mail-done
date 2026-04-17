@@ -63,6 +63,7 @@ class ApplicationListItem(BaseModel):
     category: Optional[str]
     scientific_excellence_score: Optional[int]
     research_fit_score: Optional[int]
+    position_fit_score: Optional[int]
     overall_recommendation_score: Optional[int]
     relevance_score: Optional[int]
     avg_rating: Optional[float]
@@ -110,6 +111,8 @@ class ApplicationDetailResponse(BaseModel):
     scientific_excellence_reason: Optional[str]
     research_fit_score: Optional[int]
     research_fit_reason: Optional[str]
+    position_fit_score: Optional[int]
+    position_fit_reason: Optional[str]
     overall_recommendation_score: Optional[int]
     recommendation_reason: Optional[str]  # Explanation for recommendation
     relevance_score: Optional[int]
@@ -447,6 +450,8 @@ class SharedApplicationResponse(BaseModel):
     scientific_excellence_reason: Optional[str]
     research_fit_score: Optional[int]
     research_fit_reason: Optional[str]
+    position_fit_score: Optional[int]
+    position_fit_reason: Optional[str]
     overall_recommendation_score: Optional[int]
     recommendation_reason: Optional[str]
 

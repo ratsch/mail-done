@@ -535,6 +535,10 @@ class EmailRepository:
                         metadata.scientific_excellence_score = ai_result.scientific_excellence_score
                     if ai_result.research_fit_score:
                         metadata.research_fit_score = ai_result.research_fit_score
+                    if ai_result.position_fit_score:
+                        metadata.position_fit_score = ai_result.position_fit_score
+                    if ai_result.position_fit_reason:
+                        metadata.position_fit_reason = ai_result.position_fit_reason
                     if ai_result.recommendation_score:
                         metadata.overall_recommendation_score = ai_result.recommendation_score
                     # Also store in columns that already exist

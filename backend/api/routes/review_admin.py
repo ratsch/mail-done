@@ -664,6 +664,7 @@ async def list_old_applications(
             "category": metadata.ai_category,
             "scientific_excellence_score": metadata.category_metadata.get('scientific_excellence_score') if metadata.category_metadata else None,
             "research_fit_score": metadata.research_fit_score,
+            "position_fit_score": metadata.position_fit_score,
             "overall_recommendation_score": metadata.overall_recommendation_score
         })
     

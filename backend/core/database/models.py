@@ -164,6 +164,8 @@ class EmailMetadata(Base):
     # Application-Specific Scores (UNENCRYPTED - for filtering/sorting applications)
     scientific_excellence_score = Column(Integer)  # UNENCRYPTED - 1-10 academic credentials
     research_fit_score = Column(Integer)  # UNENCRYPTED - 1-10 research alignment (applications only)
+    position_fit_score = Column(Integer)  # UNENCRYPTED - 1-10 fit to specific job posting (applications imported with X-Position-URL only)
+    position_fit_reason = Column(EncryptedText)  # ENCRYPTED - justification for position_fit_score
     overall_recommendation_score = Column(Integer)  # UNENCRYPTED - 1-10 overall recommendation (applications only)
     applicant_name = Column(String(500))  # UNENCRYPTED - applicant name extracted during classification (applications only)
     applicant_email = Column(String(500))  # UNENCRYPTED - applicant email (may differ from from_address for forwarded emails)

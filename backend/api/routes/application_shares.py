@@ -512,6 +512,8 @@ def _build_shared_response(
         scientific_excellence_reason=category_metadata.get('scientific_excellence_reason'),
         research_fit_score=metadata.research_fit_score,
         research_fit_reason=category_metadata.get('research_fit_reason'),
+        position_fit_score=metadata.position_fit_score,
+        position_fit_reason=metadata.position_fit_reason or category_metadata.get('position_fit_reason'),
         overall_recommendation_score=metadata.overall_recommendation_score,
         recommendation_reason=category_metadata.get('recommendation_reason'),
 

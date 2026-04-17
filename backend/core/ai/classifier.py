@@ -153,6 +153,8 @@ marketing, spam, social-media""")
     scientific_excellence_reason: Optional[str] = Field(None, description="Why strong or weak credentials")
     research_fit_score: Optional[int] = Field(None, ge=1, le=10, description="1-10 research alignment with lab areas")
     research_fit_reason: Optional[str] = Field(None, description="Why good or poor research fit")
+    position_fit_score: Optional[int] = Field(None, ge=1, le=10, description="1-10 fit to the specific job posting (only set when email has X-Position-URL header / POSITION REQUIREMENTS section)")
+    position_fit_reason: Optional[str] = Field(None, description="Why good or poor fit to the specific job posting")
     recommendation_score: Optional[int] = Field(None, ge=1, le=10, description="1-10 overall recommendation strength (for applications)")
     recommendation_reason: Optional[str] = Field(None, description="Why this overall recommendation")
     

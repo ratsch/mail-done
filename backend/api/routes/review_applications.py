@@ -91,6 +91,7 @@ def build_application_query(
     min_recommendation_score: Optional[int] = None,
     min_excellence_score: Optional[int] = None,
     min_research_fit_score: Optional[int] = None,
+    min_position_fit_score: Optional[int] = None,
     search_name: Optional[str] = None,
     search_text: Optional[str] = None,  # Full-text search across AI analysis fields
     received_after: Optional[str] = None,
@@ -200,7 +201,10 @@ def build_application_query(
         
         if min_research_fit_score:
             query = query.filter(EmailMetadata.research_fit_score >= min_research_fit_score)
-        
+
+        if min_position_fit_score:
+            query = query.filter(EmailMetadata.position_fit_score >= min_position_fit_score)
+
         # Name and institution search (case-insensitive, OR logic)
         if search_name:
             sanitized_search = search_name.strip().lower()
@@ -331,6 +335,7 @@ async def list_applications(
     min_recommendation_score: Optional[int] = Query(None, ge=0, le=10),
     min_excellence_score: Optional[int] = Query(None, ge=0, le=10),
     min_research_fit_score: Optional[int] = Query(None, ge=0, le=10),
+    min_position_fit_score: Optional[int] = Query(None, ge=0, le=10),
     search_name: Optional[str] = Query(None, description="Search by applicant name or institution (case-insensitive)"),
     search_text: Optional[str] = Query(None, description="Full-text search across AI analysis fields (key_strengths, concerns, ai_reasoning, current_situation, additional_notes, red_flags)"),
     received_after: Optional[str] = Query(None, description="Received after date (YYYY-MM-DD)"),
@@ -407,6 +412,7 @@ async def list_applications(
             min_recommendation_score=min_recommendation_score,
             min_excellence_score=min_excellence_score,
             min_research_fit_score=min_research_fit_score,
+            min_position_fit_score=min_position_fit_score,
             search_name=search_name,
             search_text=search_text,
             received_after=received_after,
@@ -484,6 +490,7 @@ async def list_applications(
             "recommendation_score": EmailMetadata.overall_recommendation_score,
             "excellence_score": EmailMetadata.scientific_excellence_score,
             "research_fit_score": EmailMetadata.research_fit_score,
+            "position_fit_score": EmailMetadata.position_fit_score,
             "relevance_score": EmailMetadata.relevance_score,
             "applicant_name": EmailMetadata.applicant_name,
             "institution": EmailMetadata.applicant_institution,
@@ -631,6 +638,7 @@ async def list_applications(
                 category=metadata.ai_category,
                 scientific_excellence_score=metadata.scientific_excellence_score or category_metadata.get('scientific_excellence_score'),
                 research_fit_score=metadata.research_fit_score,
+                position_fit_score=metadata.position_fit_score,
                 overall_recommendation_score=metadata.overall_recommendation_score,
                 relevance_score=metadata.relevance_score,
                 avg_rating=float(avg_rating) if avg_rating else None,
@@ -717,6 +725,7 @@ async def export_applications(
             "category": metadata.ai_category,
             "scientific_excellence_score": metadata.scientific_excellence_score or (metadata.category_metadata.get('scientific_excellence_score') if metadata.category_metadata else None),
             "research_fit_score": metadata.research_fit_score,
+            "position_fit_score": metadata.position_fit_score,
             "overall_recommendation_score": metadata.overall_recommendation_score,
             "application_status": metadata.application_status or "pending",
             "review_deadline": metadata.review_deadline.isoformat() if metadata.review_deadline else None,
@@ -1052,6 +1061,8 @@ async def get_application_detail(
         scientific_excellence_reason=category_metadata.get('scientific_excellence_reason'),
         research_fit_score=metadata.research_fit_score,
         research_fit_reason=category_metadata.get('research_fit_reason'),
+        position_fit_score=metadata.position_fit_score,
+        position_fit_reason=metadata.position_fit_reason or category_metadata.get('position_fit_reason'),
         overall_recommendation_score=metadata.overall_recommendation_score,
         recommendation_reason=category_metadata.get('recommendation_reason'),
         relevance_score=metadata.relevance_score,
@@ -1558,6 +1569,7 @@ async def export_applications(
             "category": metadata.ai_category,
             "scientific_excellence_score": metadata.scientific_excellence_score or (metadata.category_metadata.get('scientific_excellence_score') if metadata.category_metadata else None),
             "research_fit_score": metadata.research_fit_score,
+            "position_fit_score": metadata.position_fit_score,
             "overall_recommendation_score": metadata.overall_recommendation_score,
             "application_status": metadata.application_status or "pending",
             "review_deadline": metadata.review_deadline.isoformat() if metadata.review_deadline else None,
