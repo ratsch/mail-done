@@ -68,11 +68,36 @@ class OAuthPolicy:
         
         # Store env var name, read value dynamically to avoid caching issues
         self._google_client_id_env = data.get("google_client_id_env", "GOOGLE_CLIENT_ID")
-    
+
+        # Optional override for the Google redirect_uri (the URL Google
+        # calls after authentication). When unset, falls back to
+        # BACKEND_PUBLIC_URL/auth/oauth/callback. Needed for clients that
+        # serve their frontend on a different host (e.g. v0-portal at
+        # app.tailed9d1e.ts.net proxying to the backend at md.*).
+        self._google_callback_url_env = data.get("google_callback_url_env")
+
     @property
     def google_client_id(self) -> Optional[str]:
         """Get Google Client ID (reads from env dynamically to avoid cache issues)."""
         return os.getenv(self._google_client_id_env) or DEFAULT_GOOGLE_CLIENT_ID
+
+    @property
+    def google_callback_url(self) -> Optional[str]:
+        """Google OAuth redirect_uri for this client type.
+
+        Checks the policy-specific env var first (e.g.
+        V0_PORTAL_GOOGLE_CALLBACK_URL); falls back to
+        ``BACKEND_PUBLIC_URL/auth/oauth/callback``. Returns ``None`` if
+        neither is configured.
+        """
+        if self._google_callback_url_env:
+            url = os.getenv(self._google_callback_url_env)
+            if url:
+                return url.rstrip("/")
+        backend_public = os.getenv("BACKEND_PUBLIC_URL")
+        if not backend_public:
+            return None
+        return f"{backend_public.rstrip('/')}/auth/oauth/callback"
     
     def is_user_allowed(self, email: str) -> bool:
         """Check if user is allowed by this policy."""
@@ -541,12 +566,16 @@ async def oauth_init_for_client(
     # Get Google OAuth credentials from environment
     google_client_id = policy.google_client_id
     
-    # Backend's callback URL
-    backend_callback = os.getenv("BACKEND_PUBLIC_URL")
+    # Google redirect_uri: per-policy override (so frontends on a
+    # different host can receive the callback) or fall back to backend.
+    backend_callback = policy.google_callback_url
     if not backend_callback:
-        raise HTTPException(status_code=500, detail="BACKEND_PUBLIC_URL not configured")
-    backend_callback = f"{backend_callback.rstrip('/')}/auth/oauth/callback"
-    
+        raise HTTPException(
+            status_code=500,
+            detail="No Google callback URL configured "
+                   "(policy google_callback_url_env or BACKEND_PUBLIC_URL)",
+        )
+
     # Generate backend state (includes client's state for pass-through)
     backend_state = _generate_oauth_state(client_type, redirect_uri or "", state or "")
     
@@ -640,12 +669,16 @@ async def oauth_callback_for_client(
             detail=f"OAuth credentials not configured for {client_type}: missing {', '.join(missing)}",
         )
     
-    # Backend's callback URL (where Google redirected to)
-    backend_callback = os.getenv("BACKEND_PUBLIC_URL")
+    # Google redirect_uri used in the init call — must be identical here
+    # for the token exchange or Google returns redirect_uri_mismatch.
+    backend_callback = policy.google_callback_url
     if not backend_callback:
-        raise HTTPException(status_code=500, detail="BACKEND_PUBLIC_URL not configured")
-    backend_callback = f"{backend_callback.rstrip('/')}/auth/oauth/callback"
-    
+        raise HTTPException(
+            status_code=500,
+            detail="No Google callback URL configured "
+                   "(policy google_callback_url_env or BACKEND_PUBLIC_URL)",
+        )
+
     # Exchange code for tokens
     try:
         async with httpx.AsyncClient() as client:
