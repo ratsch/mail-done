@@ -196,39 +196,22 @@ async def get_sender_stats(
     sender = db.query(SenderHistory).filter(
         SenderHistory.email_address == email_address
     ).first()
-    
-    if not sender:
-        # Create basic response from emails
-        emails = db.query(Email).filter(Email.from_address == email_address).all()
-        if not emails:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=404, detail="Sender not found")
-        
-        email_count = len(emails)
-        last_seen = max(e.date for e in emails) if emails else None
-        
-        # Get category breakdown
-        categories_query = db.query(
-            EmailMetadata.ai_category,
-            func.count(EmailMetadata.id).label('count')
-        ).join(Email, EmailMetadata.email_id == Email.id).filter(
-            Email.from_address == email_address,
-            EmailMetadata.ai_category.isnot(None)
-        ).group_by(EmailMetadata.ai_category).all()
-        
-        categories = {cat: count for cat, count in categories_query if cat}
-        
-        return SenderStatsResponse(
-            email_address=email_address,
-            sender_name=emails[0].from_address if emails else None,
-            email_count=email_count,
-            last_seen=last_seen,
-            sender_type=None,
-            categories=categories,
-            avg_reply_time_hours=None
-        )
-    
-    # Get category breakdown for this sender
+
+    # Always count from the Email table (source of truth).
+    # SenderHistory.email_count can drift if emails are deleted/archived or
+    # if the aggregate wasn't recomputed after a re-index.
+    actual_count = db.query(func.count(Email.id)).filter(
+        Email.from_address == email_address
+    ).scalar() or 0
+    actual_last_seen = db.query(func.max(Email.date)).filter(
+        Email.from_address == email_address
+    ).scalar()
+
+    if not sender and actual_count == 0:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Sender not found")
+
+    # Get category breakdown (from live join, always current)
     categories_query = db.query(
         EmailMetadata.ai_category,
         func.count(EmailMetadata.id).label('count')
@@ -236,17 +219,16 @@ async def get_sender_stats(
         Email.from_address == email_address,
         EmailMetadata.ai_category.isnot(None)
     ).group_by(EmailMetadata.ai_category).all()
-    
     categories = {cat: count for cat, count in categories_query if cat}
-    
+
     return SenderStatsResponse(
-        email_address=sender.email_address,
-        sender_name=sender.sender_name,
-        email_count=sender.email_count,
-        last_seen=sender.last_seen,
-        sender_type=sender.sender_type,
+        email_address=sender.email_address if sender else email_address,
+        sender_name=sender.sender_name if sender else email_address,
+        email_count=actual_count,            # ← live count, not stale aggregate
+        last_seen=actual_last_seen,          # ← live max(date)
+        sender_type=sender.sender_type if sender else None,
         categories=categories,
-        avg_reply_time_hours=sender.avg_reply_time_hours
+        avg_reply_time_hours=sender.avg_reply_time_hours if sender else None
     )
 
 

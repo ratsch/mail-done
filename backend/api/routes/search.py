@@ -11,6 +11,7 @@ from uuid import UUID
 from datetime import datetime, date
 from pydantic import BaseModel
 import logging
+import re
 
 from backend.api.auth import verify_api_key
 from backend.core.database import get_db
@@ -132,16 +133,16 @@ async def unified_search(
                     raise HTTPException(status_code=400, detail=f"Invalid date_from format: {date_from}")
 
         if date_to:
+            # Date-only (YYYY-MM-DD) → end-of-day inclusive
+            _date_only = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to.strip()))
             try:
                 date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
             except:
                 try:
-                    date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
+                    date_to_dt = datetime.strptime(date_to.strip(), '%Y-%m-%d')
                 except Exception:
                     raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
-            # Date-only input = end-of-day (inclusive)
-            if date_to_dt.hour == 0 and date_to_dt.minute == 0 and date_to_dt.second == 0 \
-               and date_to_dt.microsecond == 0 and 'T' not in date_to and ' ' not in date_to:
+            if _date_only:
                 date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
 
         # Create unified search service
@@ -364,17 +365,18 @@ async def search_emails(
                     raise HTTPException(status_code=400, detail=f"Invalid date_from format: {date_from}")
         
         if date_to:
+            # Detect date-only input (YYYY-MM-DD) and treat as end-of-day
+            # inclusive — otherwise Email.date <= date_to drops anything
+            # received after midnight of that day.
+            _date_only = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to.strip()))
             try:
                 date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
             except:
                 try:
-                    date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
+                    date_to_dt = datetime.strptime(date_to.strip(), '%Y-%m-%d')
                 except Exception as e:
                     raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
-            # Date-only input (no explicit time) = end-of-day (inclusive).
-            # Otherwise emails received after 00:00:00 on that day get dropped.
-            if date_to_dt.hour == 0 and date_to_dt.minute == 0 and date_to_dt.second == 0 \
-               and date_to_dt.microsecond == 0 and 'T' not in date_to and ' ' not in date_to:
+            if _date_only:
                 date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
 
         # Create hybrid search
