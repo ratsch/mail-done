@@ -19,11 +19,11 @@ DEFAULT_TEMPERATURE = 1.0
 
 # Application processing model (single source of truth for reprocess_applications.py)
 # Change this to switch models for application reprocessing
-APPLICATION_MODEL = "gpt-5.1"  # Production model
+APPLICATION_MODEL = "gpt-5.4"  # Production model (replaced gpt-5.1 on 2026-04-18)
 
 # Two-stage models (only used by process_inbox.py with --use-two-stage flag)
 TWO_STAGE_FAST_MODEL = "gpt-5-mini"
-TWO_STAGE_DETAILED_MODEL = "gpt-5.1"
+TWO_STAGE_DETAILED_MODEL = "gpt-5.4"
 
 # Token estimation (improved from crude /4)
 # Based on OpenAI's tokenizer rules: ~1 token per 4 chars for English
@@ -44,7 +44,7 @@ AUTO_OPT_CONFIDENCE_THRESHOLD = 0.80  # Below this, trigger fallback
 PERSISTENT_LOW_CONFIDENCE_THRESHOLD = 0.80  # Both models below this = flag
 
 # A/B testing
-AB_TEST_DEFAULT_MODELS = ["gpt-5-mini", "gpt-5.1"]
+AB_TEST_DEFAULT_MODELS = ["gpt-5-mini", "gpt-5.4"]
 AB_TEST_TIMEOUT_SECONDS = 30  # Max time per model in A/B test
 
 # File paths

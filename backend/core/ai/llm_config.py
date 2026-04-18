@@ -178,13 +178,13 @@ def get_model_config(model_name: str) -> Tuple[str, Optional[str], Optional[str]
     Get provider config for a model.
     
     Args:
-        model_name: Model name (e.g., "gpt-5.1", "claude-3-haiku-20240307")
+        model_name: Model name (e.g., "gpt-5.4", "claude-3-haiku-20240307")
     
     Returns:
         (provider_type, api_key, endpoint, api_version)
         
     Example:
-        provider, api_key, endpoint, api_version = get_model_config("gpt-5.1")
+        provider, api_key, endpoint, api_version = get_model_config("gpt-5.4")
         if provider == "azure":
             client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
     """

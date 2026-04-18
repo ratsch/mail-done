@@ -63,7 +63,7 @@ def valid_config():
             }
         },
         "models": {
-            "gpt-5.1": "azure_sweden",
+            "gpt-5.4": "azure_sweden",
             "gpt-5-mini": "azure_west",
             "gpt-4o": "openai",
             "claude-3": "anthropic",
@@ -244,7 +244,7 @@ class TestGetModelConfig:
         llm_config_module._config = valid_config
         
         with patch.dict(os.environ, {"AZURE_SWEDEN_KEY": "test-key"}):
-            provider, api_key, endpoint, api_version = get_model_config("gpt-5.1")
+            provider, api_key, endpoint, api_version = get_model_config("gpt-5.4")
             
             assert provider == "azure"
             assert api_key == "test-key"
@@ -301,7 +301,7 @@ class TestGetModelConfig:
         llm_config_module._config = valid_config
         
         with patch.dict(os.environ, {}, clear=True):
-            provider, api_key, endpoint, api_version = get_model_config("gpt-5.1")
+            provider, api_key, endpoint, api_version = get_model_config("gpt-5.4")
             
             assert provider == "azure"
             assert api_key is None  # Not set
@@ -338,7 +338,7 @@ class TestCredentialTesting:
         llm_config_module._config = valid_config
         
         with patch.dict(os.environ, {"AZURE_SWEDEN_KEY": "test-key"}):
-            result = test_model_credentials("gpt-5.1", send_test_message=False)
+            result = test_model_credentials("gpt-5.4", send_test_message=False)
             
             assert result.success is True
             assert result.provider == "azure"
@@ -349,7 +349,7 @@ class TestCredentialTesting:
         llm_config_module._config = valid_config
         
         with patch.dict(os.environ, {}, clear=True):
-            result = test_model_credentials("gpt-5.1", send_test_message=False)
+            result = test_model_credentials("gpt-5.4", send_test_message=False)
             
             assert result.success is False
             assert "not set" in result.message.lower()
@@ -392,9 +392,9 @@ class TestListFunctions:
         
         models = list_configured_models()
         
-        assert "gpt-5.1" in models
+        assert "gpt-5.4" in models
         assert "gpt-5-mini" in models
-        assert models["gpt-5.1"] == "azure_sweden"
+        assert models["gpt-5.4"] == "azure_sweden"
     
     def test_list_providers(self, valid_config):
         """Should return all provider configs."""
@@ -439,7 +439,7 @@ class TestIntegration:
                 }
             },
             "models": {
-                "gpt-5.1": "azure_sweden",
+                "gpt-5.4": "azure_sweden",
                 "gpt-5-pro": "azure_sweden",
                 "gpt-5-mini": "azure_west_europe",
                 "text-embedding-3-small": "azure_west_europe"
@@ -459,7 +459,7 @@ class TestIntegration:
             "AZURE_OPENAI_API_KEY": "west-key"
         }):
             # GPT-5.1 should use Sweden
-            p, k, e, v = get_model_config("gpt-5.1")
+            p, k, e, v = get_model_config("gpt-5.4")
             assert p == "azure"
             assert k == "sweden-key"
             assert "swede" in e.lower()

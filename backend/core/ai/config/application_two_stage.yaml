@@ -4,7 +4,7 @@
 #
 # Strategy:
 # - Stage 1: gpt-5-mini (fast, all emails)
-# - Stage 2: gpt-5.1 (detailed, only promising applications)
+# - Stage 2: gpt-5.4 (detailed, only promising applications)
 #
 # Format (Simple):
 #   category_name: threshold
@@ -20,7 +20,7 @@
 
 # Models (provider auto-detected from llm_endpoints.yaml based on model name)
 fast_model: "gpt-5-mini"      # Stage 1: Fast classification -> azure_west_europe
-detailed_model: "gpt-5.1"     # Stage 2: Detailed scoring -> azure_sweden
+detailed_model: "gpt-5.4"     # Stage 2: Detailed scoring -> azure_sweden
 
 # Thresholds - Using advanced format with AND logic
 stage_2_criteria:

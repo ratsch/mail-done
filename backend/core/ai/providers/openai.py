@@ -55,6 +55,7 @@ class OpenAIProvider(BaseLLMProvider):
             "gpt-5.1": {"input": 1.25, "output": 10.00},  # GPT-5.1 (Nov 2025)
             "gpt-5.1-instant": {"input": 1.00, "output": 8.00},
             "gpt-5.1-thinking": {"input": 1.50, "output": 12.00},
+            "gpt-5.4": {"input": 2.50, "output": 15.00},  # Azure Sweden Standard (Apr 2026)
             
             # o1 series (reasoning models)
             "o1-preview": {"input": 15.00, "output": 60.00},

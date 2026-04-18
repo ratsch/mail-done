@@ -435,7 +435,8 @@ class AIClassifier:
             'gpt-5': {'input': 10.00, 'output': 30.00, 'cached': 5.00},  # 50% off (estimated)
             'gpt-5-mini': {'input': 0.25, 'output': 1.00, 'cached': 0.125},  # 50% off (estimated)
             'gpt-5-nano': {'input': 0.10, 'output': 0.40, 'cached': 0.050},  # 50% off (estimated)
-            'gpt-5.1': {'input': 15.00, 'output': 60.00, 'cached': 7.50},  # 50% off (estimated)
+            'gpt-5.1': {'input': 15.00, 'output': 60.00, 'cached': 7.50},  # 50% off (estimated; retained for historical cost rows)
+            'gpt-5.4': {'input': 2.50, 'output': 15.00, 'cached': 0.25},  # Azure Sweden Standard (Apr 2026)
             'gpt-3.5-turbo': {'input': 0.50, 'output': 1.50, 'cached': 0.25},  # 50% off
             # Anthropic (no caching support yet)
             'claude-3-opus-20240229': {'input': 15.00, 'output': 75.00, 'cached': 15.00},

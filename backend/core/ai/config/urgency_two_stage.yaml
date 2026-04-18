@@ -13,7 +13,7 @@
 
 # Models
 fast_model: "gpt-5-mini"      # Stage 1: Fast classification
-detailed_model: "gpt-5.1"        # Stage 2: Urgency verification
+detailed_model: "gpt-5.4"        # Stage 2: Urgency verification
 
 # Trigger criteria (run Stage 2 if ANY condition matches)
 stage_2_criteria:
