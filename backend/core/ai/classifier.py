@@ -131,6 +131,28 @@ marketing, spam, social-media""")
     
     # Sentiment
     sentiment: str = Field(description="positive|neutral|negative")
+
+    # Notification flag (NOTIFY_WORTHY detection, category-agnostic).
+    # Set ONLY for emails that should trigger a real-time notification
+    # (target: ≤2/day). See "NOTIFY_WORTHY DETECTION" in the classifier
+    # prompt for the exact criteria. Stage 2 always verifies when true.
+    notify_worthy: bool = Field(
+        default=False,
+        description=(
+            "True only if this email should trigger an immediate notification "
+            "(push / Slack DM). Strict: must match one of the prompt's four "
+            "patterns (urgent+actionable, major positive outcome, major "
+            "negative outcome, high-stakes decision). Target ≤2/day."
+        ),
+    )
+    notify_reason: Optional[str] = Field(
+        None,
+        description=(
+            "Short phrase explaining why notify_worthy=true "
+            "(e.g., 'grant awarded', 'paper accepted at Nature', 'SNSF "
+            "revision deadline in 24h'). Required when notify_worthy=true."
+        ),
+    )
     
     # Relevance Scores (for invitations/reviews/applications - from n8n)
     relevance_score: Optional[int] = Field(None, ge=1, le=10, description="1-10 relevance to biomedical informatics research")

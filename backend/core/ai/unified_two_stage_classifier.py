@@ -287,20 +287,28 @@ class UnifiedTwoStageClassifier:
             (should_run, reason)
         """
         reasons = []
-        
+
         # Check application criteria
         app_trigger = self._check_application_criteria(result)
         if app_trigger:
             reasons.append(f"application: {app_trigger}")
-        
+
         # Check urgency criteria
         urgency_trigger = self._check_urgency_criteria(result)
         if urgency_trigger:
             reasons.append(f"urgency: {urgency_trigger}")
-        
+
+        # Notify-worthy flag (category-agnostic, strict top-2/day signal).
+        # When Stage 1 believes this email should interrupt the user, always
+        # verify with Stage 2 — false positives here are expensive (spurious
+        # push notifications), so the second pass with the stronger model
+        # acts as a precision filter.
+        if getattr(result, "notify_worthy", False):
+            reasons.append("notify_worthy=true")
+
         if reasons:
             return True, "; ".join(reasons)
-        
+
         return False, ""
     
     def _check_application_criteria(self, result: AIClassificationResult) -> Optional[str]:

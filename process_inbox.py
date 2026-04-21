@@ -368,6 +368,7 @@ class EmailProcessingPipeline:
             'rule_matched': 0,
             'ai_classified': 0,
             'stage_2_triggered': 0,
+            'notify_worthy': 0,
             'ai_failures': 0,
             'ai_reprocessed': 0,
             'db_stored': 0,
@@ -711,6 +712,9 @@ class EmailProcessingPipeline:
                         'stage_2_triggered': stage_2_triggered,
                         'stage_2_reason': (detailed_result.get('stage_2_reason') if stage_2_triggered and detailed_result else None),
                         'stage_2_model': (detailed_result.get('two_stage_metadata', {}).get('stage_2_model') if stage_2_triggered and detailed_result else None),
+                        # Notify-worthy flag (category-agnostic, ≤2/day budget)
+                        'notify_worthy': getattr(ai_classification, 'notify_worthy', False),
+                        'notify_reason': getattr(ai_classification, 'notify_reason', None),
                     }
                     if stage_2_triggered:
                         # Include reason for Stage 2 trigger
@@ -725,6 +729,8 @@ class EmailProcessingPipeline:
                     self.stats['ai_classified'] += 1
                     if stage_2_triggered:
                         self.stats['stage_2_triggered'] += 1
+                    if getattr(ai_classification, 'notify_worthy', False):
+                        self.stats['notify_worthy'] += 1
                     if is_reprocessing:
                         self.stats['ai_reprocessed'] += 1
                         result['reprocessed'] = True
@@ -2505,6 +2511,11 @@ class EmailProcessingPipeline:
                 model_str = f" {s2_model}" if s2_model else ""
                 reason_str = f": {s2_reason}" if s2_reason else ""
                 ai_line += f"  🔬 STAGE 2{model_str}{reason_str}"
+            # Notify-worthy marker — these are emails we'd push-notify on.
+            # Show after Stage 2 marker so the bell stands out even when both fire.
+            if ai_cat.get('notify_worthy'):
+                reason = ai_cat.get('notify_reason') or '(no reason given)'
+                ai_line += f"  🔔 NOTIFY: {reason}"
             print(ai_line, flush=True)
         
         # Show extra detail for VIP, urgent, errors, invitations
@@ -2692,6 +2703,8 @@ class EmailProcessingPipeline:
             if self.stats.get('stage_2_triggered', 0) > 0:
                 pct = 100.0 * self.stats['stage_2_triggered'] / max(self.stats['ai_classified'], 1)
                 print(f"   🔬 Stage 2 verified: {self.stats['stage_2_triggered']} ({pct:.1f}%)")
+            if self.stats.get('notify_worthy', 0) > 0:
+                print(f"   🔔 Notify-worthy: {self.stats['notify_worthy']}")
             if self.stats['ai_reprocessed'] > 0:
                 print(f"   🔄 Reprocessed: {self.stats['ai_reprocessed']}")
             if self.stats['ai_failures'] > 0:

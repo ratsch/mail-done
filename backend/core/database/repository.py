@@ -526,6 +526,13 @@ class EmailRepository:
                 # Queryable → metadata tier, not PII.
                 if getattr(ai_result, 'deadline_consequence', None):
                     category_metadata['deadline_consequence'] = ai_result.deadline_consequence
+                # notify_worthy + notify_reason — real-time notification flag
+                # (category-agnostic, top-2/day budget). Queryable for
+                # downstream notification rate-limiter / dashboards.
+                if getattr(ai_result, 'notify_worthy', False):
+                    category_metadata['notify_worthy'] = True
+                    if getattr(ai_result, 'notify_reason', None):
+                        category_metadata['notify_reason'] = ai_result.notify_reason
                 if ai_result.location:
                     category_data['location'] = ai_result.location  # Could contain PII
                 if ai_result.time_commitment_hours:
