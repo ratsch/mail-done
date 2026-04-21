@@ -1724,11 +1724,21 @@ class EmailProcessingPipeline:
         
         for item in results:
             if isinstance(item, Exception):
+                # Unknown UID path: log traceback so we can find the source.
+                logger.warning(
+                    f"Parallel batch raised: {item!r}", exc_info=item
+                )
                 failed.append(('unknown', str(item)))
                 continue
-                
+
             uid, result, error = item
             if error:
+                # Log the full traceback once so the source of generic
+                # errors like "list index out of range" is attributable.
+                logger.warning(
+                    f"Email {uid} failed: {type(error).__name__}: {error}",
+                    exc_info=error,
+                )
                 self.stats['errors'].append({'uid': uid, 'error': str(error), 'type': type(error).__name__})
                 failed.append((uid, str(error)))
             elif result:
