@@ -153,6 +153,7 @@ class EmailProcessingPipeline:
                  use_database: bool = True,
                  use_ai: bool = True,
                  use_two_stage: bool = False,
+                 skip_application_stage2: bool = False,
                  reprocess: bool = False,
                  generate_embeddings: bool = True,
                  track_responses: bool = True,
@@ -199,6 +200,7 @@ class EmailProcessingPipeline:
             logger.warning("   Use --skip-database only for testing. For production, enable database to avoid reprocessing.")
         self.use_ai = use_ai and AI_AVAILABLE
         self.use_two_stage = use_two_stage
+        self.skip_application_stage2 = skip_application_stage2
         self.reprocess = reprocess
         self.parallel_workers = max(1, min(50, parallel_embeddings))  # Clamp to 1-50
         self.safe_move = safe_move
@@ -235,9 +237,14 @@ class EmailProcessingPipeline:
                 if self.use_two_stage:
                     self.ai_classifier = UnifiedTwoStageClassifier(
                         fast_model=TWO_STAGE_FAST_MODEL,
-                        detailed_model=TWO_STAGE_DETAILED_MODEL
+                        detailed_model=TWO_STAGE_DETAILED_MODEL,
+                        skip_application_stage2=self.skip_application_stage2,
                     )
-                    logger.info(f"✅ Two-stage AI classifier initialized ({TWO_STAGE_FAST_MODEL} → {TWO_STAGE_DETAILED_MODEL})")
+                    skip_msg = " (application-* Stage 2 suppressed)" if self.skip_application_stage2 else ""
+                    logger.info(
+                        f"✅ Two-stage AI classifier initialized "
+                        f"({TWO_STAGE_FAST_MODEL} → {TWO_STAGE_DETAILED_MODEL}){skip_msg}"
+                    )
                 else:
                     self.ai_classifier = AIClassifier(model=DEFAULT_MODEL)
                     logger.info("✅ AI classifier initialized (gpt-5-mini)")
@@ -2759,6 +2766,12 @@ async def main():
                        help='Skip AI classification (Phase 2)')
     parser.add_argument('--use-two-stage', action='store_true',
                        help='Use two-stage classifier (gpt-5-mini → gpt-5.1) instead of one-stage (gpt-5-mini)')
+    parser.add_argument('--skip-application-stage2', action='store_true',
+                       help='When --use-two-stage is set, suppress Stage 2 for application-* '
+                            'categories (application-phd, application-postdoc, etc.). '
+                            'Use in triage pipelines where deep application scoring is handled '
+                            'separately by reprocess_applications.py. Urgency-based Stage 2 '
+                            'triggers (work-*, grant-*, invitation-*) still apply.')
     parser.add_argument('--skip-database', action='store_true',
                        help='Skip database storage (Phase 2)')
     parser.add_argument('--reprocess', action='store_true',
@@ -3531,6 +3544,7 @@ async def main():
                     use_database=not args.skip_database,
                     use_ai=not args.skip_ai,
                     use_two_stage=args.use_two_stage,
+                    skip_application_stage2=args.skip_application_stage2,
                     reprocess=args.reprocess,
                     generate_embeddings=not args.skip_embeddings,
                     track_responses=not args.skip_tracking,
@@ -3755,6 +3769,7 @@ async def main():
         use_database=not args.skip_database,
         use_ai=not args.skip_ai,
         use_two_stage=args.use_two_stage,
+        skip_application_stage2=args.skip_application_stage2,
         reprocess=args.reprocess,
         generate_embeddings=not args.skip_embeddings,
         track_responses=not args.skip_tracking,

@@ -119,11 +119,12 @@ class UnifiedTwoStageClassifier:
         fast_provider: Optional[str] = None,
         detailed_provider: Optional[str] = None,
         application_config_path: Optional[str] = None,
-        urgency_config_path: Optional[str] = None
+        urgency_config_path: Optional[str] = None,
+        skip_application_stage2: bool = False,
     ):
         """
         Initialize unified two-stage classifier.
-        
+
         Args:
             fast_model: Model for Stage 1
             detailed_model: Model for Stage 2
@@ -131,10 +132,17 @@ class UnifiedTwoStageClassifier:
             detailed_provider: Provider for Stage 2 ("openai", "azure", or "anthropic")
             application_config_path: Path to application_two_stage.yaml
             urgency_config_path: Path to urgency_two_stage.yaml
+            skip_application_stage2: If True, do NOT trigger Stage 2 verification
+                for ``application-*`` categories. Use this in triage pipelines
+                where deep application scoring is handled separately by
+                ``reprocess_applications.py``. Urgency-based Stage 2 triggers
+                (work-*, grant-*, invitation-*) continue to apply.
         """
         # Load configurations first to get provider info if not specified
         self.app_config = self._load_app_config(application_config_path)
         self.urgency_config = self._load_urgency_config(urgency_config_path)
+
+        self.skip_application_stage2 = skip_application_stage2
         
         # Set models and providers (config can override defaults)
         self.fast_model = self.app_config.get('fast_model', fast_model)
@@ -298,7 +306,13 @@ class UnifiedTwoStageClassifier:
     def _check_application_criteria(self, result: AIClassificationResult) -> Optional[str]:
         """Check if application criteria met."""
         category = result.category
-        
+
+        # Triage-mode opt-out: skip Stage 2 for application-* categories so
+        # the triage cron does not duplicate deep scoring work that
+        # reprocess_applications.py runs on demand.
+        if self.skip_application_stage2 and category and category.startswith("application-"):
+            return None
+
         if category not in self.app_criteria:
             return None
         
