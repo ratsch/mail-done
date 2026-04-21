@@ -72,15 +72,39 @@ class EmailProcessor:
         Returns:
             ProcessedEmail with normalized content
         """
+        # Parse with modern policy for Unicode / encoded-filename support.
+        # Some senders (notably Microsoft CMT, noreply@msr-cmt.org) emit
+        # Message-IDs like <[929a7a0a...-JFZGS...@microsoft.com]> — the
+        # enclosing square brackets trip CPython's strict RFC-5322 parser,
+        # which raises `IndexError: list index out of range` from
+        # `_header_value_parser.get_obs_local_part`. Detect this by
+        # iterating headers once; on failure, re-parse with the permissive
+        # compat32 policy so downstream `.get()` calls work. Without this,
+        # affected messages reprocessed forever with no useful error.
+        msg = None
         try:
-            # Use modern email policy for better handling of:
-            # - Encoded filenames (=?utf-8?Q?...?=)
-            # - Unicode content
-            # - Consistent parameter parsing
             msg = email.message_from_bytes(raw_email, policy=policy.default)
+            _ = list(msg.items())  # force strict parse; may raise
+        except (IndexError, ValueError, AttributeError) as strict_err:
+            logger.warning(
+                f"Email {uid}: strict header parse failed ({strict_err}); "
+                f"re-parsing with compat32 policy"
+            )
+            try:
+                msg = email.message_from_bytes(raw_email, policy=policy.compat32)
+            except Exception as e2:
+                msg = None
+                fatal_err = e2
+            else:
+                fatal_err = None
         except Exception as e:
-            logger.error(f"Failed to parse email {uid}: {e}")
-            # Return minimal email with error info
+            msg = None
+            fatal_err = e
+        else:
+            fatal_err = None
+
+        if msg is None:
+            logger.error(f"Failed to parse email {uid}: {fatal_err}")
             return ProcessedEmail(
                 uid=uid,
                 message_id=f"<error-{uid}>",
@@ -92,20 +116,49 @@ class EmailProcessor:
                 to_names=[],
                 cc_addresses=[],
                 date=datetime.now(),
-                body_markdown=f"Failed to parse email: {str(e)[:200]}",
-                body_text=f"Failed to parse email: {str(e)[:200]}",
+                body_markdown=f"Failed to parse email: {str(fatal_err)[:200]}",
+                body_text=f"Failed to parse email: {str(fatal_err)[:200]}",
                 sender_domain="error",
             )
         
         # Extract ALL headers (for preprocessing)
-        # Convert Header objects to strings (some headers may be Header objects)
+        # Convert Header objects to strings (some headers may be Header objects).
+        #
+        # NOTE: `msg.items()` iterates headers under policy.default, which
+        # eagerly parses each value (Message-ID, From, etc.). A small
+        # fraction of real-world senders (notably Microsoft CMT's
+        # noreply@msr-cmt.org) produce malformed Message-ID headers that
+        # trigger `IndexError: list index out of range` deep inside
+        # CPython's email._header_value_parser. Previously this aborted
+        # the entire email's processing — the 3 CMT messages in the
+        # user's inbox were stuck for weeks re-erroring on every run.
+        #
+        # Fall back to the raw-header interface when strict parsing
+        # explodes: msg.raw_items() isn't public, but `msg._headers`
+        # exposes the pre-parse (key, raw_value) tuples. We still
+        # try each value's string coercion under try-except so a
+        # single bad header never kills the pipeline.
         raw_headers = {}
-        for key, value in msg.items():
-            if isinstance(value, str):
-                raw_headers[key] = value
-            else:
-                # Convert email.header.Header objects to string
-                raw_headers[key] = str(value)
+        try:
+            header_items = list(msg.items())
+        except (IndexError, ValueError, AttributeError) as parse_err:
+            logger.warning(
+                f"Email {uid}: strict header parse failed ({parse_err}); "
+                f"falling back to raw header access"
+            )
+            header_items = list(getattr(msg, "_headers", []) or [])
+        for key, value in header_items:
+            try:
+                if isinstance(value, str):
+                    raw_headers[key] = value
+                else:
+                    raw_headers[key] = str(value)
+            except Exception as hdr_err:
+                logger.debug(
+                    f"Email {uid}: header {key!r} coercion failed ({hdr_err}); "
+                    f"skipping"
+                )
+                continue
         
         # Extract basic headers with validation
         subject = self._decode_header(msg.get('Subject', ''))
