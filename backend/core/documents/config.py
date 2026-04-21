@@ -121,6 +121,11 @@ class FolderScanConfig:
     exclude_patterns: Optional[list[str]] = None
     max_file_size_mb: Optional[int] = None
 
+    # If True, only index files that have a co-located `.ocr.json` sidecar.
+    # Useful for image trees where non-OCR'd photos (camera rolls, wallpapers)
+    # shouldn't create no-content document rows.
+    require_ocr_sidecar: bool = False
+
     @property
     def effective_extensions(self) -> list[str]:
         """Get effective extensions list (override or host default)."""

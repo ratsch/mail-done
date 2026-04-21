@@ -487,6 +487,14 @@ class FolderScanner:
                     if stat.st_size > max_size:
                         continue
 
+                    # Require a co-located .ocr.json sidecar if configured.
+                    # Saves expensive metadata + DB inserts for bulk photo
+                    # trees where only OCR'd files carry useful content.
+                    if getattr(config, 'require_ocr_sidecar', False):
+                        sidecar = entry.parent / (entry.name + '.ocr.json')
+                        if not sidecar.exists():
+                            continue
+
                     yield FileInfo(
                         path=entry,
                         size=stat.st_size,

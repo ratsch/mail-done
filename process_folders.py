@@ -133,6 +133,7 @@ async def scan_folder(args):
         extensions=extensions,
         exclude_patterns=exclude_patterns,
         max_file_size_mb=args.max_size,
+        require_ocr_sidecar=getattr(args, 'require_ocr_sidecar', False),
     )
 
     # Create scanner with cache if specified
@@ -365,6 +366,13 @@ Examples:
         type=int,
         default=50,
         help="Commit to database every N files (default: 50). Set to 0 to commit only at end.",
+    )
+    parser.add_argument(
+        "--require-ocr-sidecar",
+        action="store_true",
+        help="Only index files that have a co-located .ocr.json sidecar. "
+             "Useful for image trees where non-OCR'd photos shouldn't create "
+             "no-content document rows.",
     )
     parser.add_argument(
         "--skip-ocr-sidecars",
