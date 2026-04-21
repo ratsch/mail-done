@@ -369,6 +369,7 @@ class EmailProcessingPipeline:
             'ai_classified': 0,
             'stage_2_triggered': 0,
             'notify_worthy': 0,
+            'notifications_sent': 0,
             'ai_failures': 0,
             'ai_reprocessed': 0,
             'db_stored': 0,
@@ -810,6 +811,39 @@ class EmailProcessingPipeline:
                     # Step 8: Generate Drafts (Phase 3)
                     if self.generate_drafts and ai_classification:
                         self._sync_generate_drafts(session, _db_email, email, ai_classification, result)
+
+                    # Step 8.5: Emit notification for notify-worthy emails.
+                    # The send_notification helper is a no-op unless the classifier
+                    # set notify_worthy=true. It dedupes via metadata, rate-limits
+                    # per account, and never raises (log-only on failure).
+                    if ai_classification and not self.actions_only:
+                        try:
+                            from backend.core.notifications.notify import send_notification
+                            from backend.core.database.models import EmailMetadata as _EM
+                            _metadata_row = (
+                                session.query(_EM)
+                                .filter(_EM.email_id == _db_email.id)
+                                .first()
+                            )
+                            notify_msg_id = send_notification(
+                                db=session,
+                                account_id=self.account_id,
+                                email_metadata=_metadata_row,
+                                email_db_row=_db_email,
+                                ai_classification=ai_classification,
+                                stage_2_triggered=stage_2_triggered,
+                                dry_run=self.dry_run,
+                            )
+                            if notify_msg_id:
+                                self.stats['notifications_sent'] = (
+                                    self.stats.get('notifications_sent', 0) + 1
+                                )
+                                result['notification_sent'] = notify_msg_id
+                        except Exception as notify_e:
+                            logger.warning(
+                                f"send_notification failed for {_db_email.id}: {notify_e}",
+                                exc_info=True,
+                            )
 
                     # All operations successful, commit the transaction
                     session.commit()
@@ -2704,7 +2738,9 @@ class EmailProcessingPipeline:
                 pct = 100.0 * self.stats['stage_2_triggered'] / max(self.stats['ai_classified'], 1)
                 print(f"   🔬 Stage 2 verified: {self.stats['stage_2_triggered']} ({pct:.1f}%)")
             if self.stats.get('notify_worthy', 0) > 0:
-                print(f"   🔔 Notify-worthy: {self.stats['notify_worthy']}")
+                sent = self.stats.get('notifications_sent', 0)
+                sent_str = f" — {sent} delivered" if sent else ""
+                print(f"   🔔 Notify-worthy: {self.stats['notify_worthy']}{sent_str}")
             if self.stats['ai_reprocessed'] > 0:
                 print(f"   🔄 Reprocessed: {self.stats['ai_reprocessed']}")
             if self.stats['ai_failures'] > 0:
