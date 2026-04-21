@@ -19,8 +19,8 @@ Design choices:
 - One notification per email, ever. A ``notify_sent_at`` timestamp is
   stored in ``category_metadata`` so re-runs (``--reprocess``) do not
   re-notify.
-- Per-account hourly rate limit (default 3/hour). If the classifier ever
-  goes wild, we don't flood Slack.
+- No rate limiting during initial calibration — we want full visibility
+  into what the classifier flags so the prompt can be tuned.
 - Kill switch: ``MAIL_DONE_NOTIFY_ENABLED=false`` disables emission.
 """
 
@@ -129,20 +129,21 @@ def _format_body(
     notify_reason: str,
     category: str,
     urgency_score: Optional[int],
+    deadline: Optional[str],
+    deadline_consequence: Optional[str],
     from_display: str,
     date_str: str,
     subject: str,
     summary: str,
     stage_2_triggered: bool,
 ) -> str:
-    urgency_line = f"Urgency: {urgency_score}/10" if urgency_score is not None else ""
     verified = "Stage 2 verified" if stage_2_triggered else "Stage 1 only"
-    lines = [
-        f"Why: {notify_reason}",
-        f"Category: {category}",
-    ]
-    if urgency_line:
-        lines.append(urgency_line)
+    lines = [f"Why: {notify_reason}", f"Category: {category}"]
+    if urgency_score is not None:
+        lines.append(f"Urgency: {urgency_score}/10")
+    if deadline:
+        consequence = f" — {deadline_consequence}" if deadline_consequence else ""
+        lines.append(f"Deadline: {deadline}{consequence}")
     lines.extend([
         "",
         f"From:      {from_display}",
@@ -186,15 +187,11 @@ def send_notification(
         )
         return None
 
-    # Rate limit: refuse to flood Slack if classifier goes wrong.
-    recent = _recent_notification_count(db, account_id, hours=1)
-    if recent >= cfg.rate_limit_per_hour:
-        logger.warning(
-            f"Notify rate-limited for account={account_id}: "
-            f"{recent} notifications in last hour (limit {cfg.rate_limit_per_hour}). "
-            f"Skipping email {email_db_row.id} ({ai_classification.notify_reason!r})"
-        )
-        return None
+    # Rate limit intentionally not enforced yet — we want full visibility
+    # into what the classifier flags while we calibrate. Per-email dedup
+    # (notify_sent_at in category_metadata) still prevents duplicate
+    # notifications for the same email. Re-enable by setting
+    # MAIL_DONE_NOTIFY_RATE_PER_HOUR in env and re-introducing the check.
 
     if dry_run:
         logger.info(
@@ -217,6 +214,8 @@ def send_notification(
         notify_reason=notify_reason,
         category=ai_classification.category,
         urgency_score=getattr(ai_classification, "urgency_score", None),
+        deadline=getattr(ai_classification, "deadline", None),
+        deadline_consequence=getattr(ai_classification, "deadline_consequence", None),
         from_display=from_display,
         date_str=date_str,
         subject=email_db_row.subject or "(no subject)",
