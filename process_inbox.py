@@ -367,6 +367,7 @@ class EmailProcessingPipeline:
             'vip_detected': 0,
             'rule_matched': 0,
             'ai_classified': 0,
+            'stage_2_triggered': 0,
             'ai_failures': 0,
             'ai_reprocessed': 0,
             'db_stored': 0,
@@ -705,7 +706,11 @@ class EmailProcessingPipeline:
                         'applicant_name': getattr(ai_classification, 'applicant_name', None),
                         'applicant_institution': getattr(ai_classification, 'applicant_institution', None),
                         'scientific_excellence_score': getattr(ai_classification, 'scientific_excellence_score', None),
-                        'recommendation_score': getattr(ai_classification, 'recommendation_score', None)
+                        'recommendation_score': getattr(ai_classification, 'recommendation_score', None),
+                        # Two-stage visibility — rendered by the per-email card
+                        'stage_2_triggered': stage_2_triggered,
+                        'stage_2_reason': (detailed_result.get('stage_2_reason') if stage_2_triggered and detailed_result else None),
+                        'stage_2_model': (detailed_result.get('two_stage_metadata', {}).get('stage_2_model') if stage_2_triggered and detailed_result else None),
                     }
                     if stage_2_triggered:
                         # Include reason for Stage 2 trigger
@@ -718,6 +723,8 @@ class EmailProcessingPipeline:
                     else:
                         result['actions'].append(f"AI: {ai_classification.category} (confidence: {ai_classification.confidence:.2f})")
                     self.stats['ai_classified'] += 1
+                    if stage_2_triggered:
+                        self.stats['stage_2_triggered'] += 1
                     if is_reprocessing:
                         self.stats['ai_reprocessed'] += 1
                         result['reprocessed'] = True
@@ -2486,11 +2493,18 @@ class EmailProcessingPipeline:
             category = ai_cat.get('category', '')
             confidence = ai_cat.get('confidence', 0.0)
             ai_time = result.get('ai_time', 0)
-            
+
             ai_line = f"AI:       {category} (confidence: {confidence:.2f}"
             if ai_time > 0:
                 ai_line += f", {ai_time:.1f}s"
             ai_line += ")"
+            # Prominent Stage-2 marker so two-stage-verified emails stand out
+            if ai_cat.get('stage_2_triggered'):
+                s2_model = ai_cat.get('stage_2_model') or ''
+                s2_reason = ai_cat.get('stage_2_reason') or ''
+                model_str = f" {s2_model}" if s2_model else ""
+                reason_str = f": {s2_reason}" if s2_reason else ""
+                ai_line += f"  🔬 STAGE 2{model_str}{reason_str}"
             print(ai_line, flush=True)
         
         # Show extra detail for VIP, urgent, errors, invitations
@@ -2675,6 +2689,9 @@ class EmailProcessingPipeline:
         # AI classification stats (Phase 2)
         if self.stats['ai_classified'] > 0 or self.stats['ai_failures'] > 0:
             print(f"🤖 AI Classifications: {self.stats['ai_classified']}")
+            if self.stats.get('stage_2_triggered', 0) > 0:
+                pct = 100.0 * self.stats['stage_2_triggered'] / max(self.stats['ai_classified'], 1)
+                print(f"   🔬 Stage 2 verified: {self.stats['stage_2_triggered']} ({pct:.1f}%)")
             if self.stats['ai_reprocessed'] > 0:
                 print(f"   🔄 Reprocessed: {self.stats['ai_reprocessed']}")
             if self.stats['ai_failures'] > 0:

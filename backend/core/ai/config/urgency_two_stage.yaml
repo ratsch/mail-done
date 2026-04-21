@@ -68,6 +68,27 @@ stage_2_criteria:
     # Always verify (rare, confused with marketing/events)
     verify: true
 
+  invitation-grant:
+    urgency_score: 6  # join-this-grant invites with tight submission deadlines
+
+  # 4. Review categories — external deadlines, burning bridges if missed.
+  review-peer-journal:
+    urgency_score: 5  # journal reviewer deadlines are hard
+  review-peer-conference:
+    urgency_score: 5  # PC deadlines are hard
+  review-grant:
+    # Always verify (rare, high stakes, funder-imposed deadlines)
+    verify: true
+  review-phd-committee:
+    # Always verify (rare, student graduation depends on it)
+    verify: true
+
+  # 5. Publication lifecycle — publisher-imposed deadlines.
+  publication-revision-request:
+    urgency_score: 6  # journal revision windows are fixed
+  publication-proofs:
+    urgency_score: 6  # proof-correction windows are short (often 48h)
+
 # What to do with Stage 2 results
 combine_strategy:
   category: "stage2"      # Trust Stage 2 for category (more accurate)
