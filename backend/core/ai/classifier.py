@@ -141,6 +141,15 @@ marketing, spam, social-media""")
     # Event/Deadline Info (for invitations/reviews)
     event_date: Optional[str] = Field(None, description="Event date YYYY-MM-DD (for invitations)")
     deadline: Optional[str] = Field(None, description="Review/response deadline YYYY-MM-DD")
+    deadline_consequence: Optional[str] = Field(
+        None,
+        description=(
+            "Short phrase describing what happens if the deadline is missed "
+            "(e.g., 'proposal not considered', 'eligibility lost', 'contract forfeited'). "
+            "Set whenever the email triggers CRITICAL DEADLINE DETECTION in the prompt; "
+            "leave null for soft/implicit deadlines."
+        ),
+    )
     location: Optional[str] = Field(None, description="Event location (for invitations)")
     time_commitment_hours: Optional[int] = Field(None, ge=0, description="Estimated hours required (0-1000)")
     time_commitment_reason: Optional[str] = Field(None, description="Why this time estimate")
@@ -408,52 +417,24 @@ class AIClassifier:
         """
         Calculate API cost based on model pricing, accounting for cached tokens.
         
-        OpenAI Pricing (as of Nov 2025):
-        - gpt-4o: $5.00/1M input, $15.00/1M output, $2.50/1M cached (50% off)
-        - gpt-4o-mini: $0.150/1M input, $0.600/1M output, $0.075/1M cached (50% off)
-        - gpt-4.1 series: $2.00/1M input, $10.00/1M output, $0.50/1M cached (75% off)
-        - gpt-5 series: Similar discounts
-        
-        Anthropic Pricing (no caching yet):
-        - claude-3-opus: $15.00/1M input, $75.00/1M output
-        - claude-3-sonnet: $3.00/1M input, $15.00/1M output
-        - claude-3-haiku: $0.25/1M input, $1.25/1M output
-        
+        Per-model prices live in backend/core/ai/pricing.py. That module
+        is the single source of truth — do not duplicate prices here.
+
         Args:
             prompt_tokens: Total prompt tokens (including cached)
             completion_tokens: Output tokens
             cached_tokens: Tokens served from cache (discounted)
         """
-        # Pricing table (per 1M tokens)
-        pricing = {
-            'gpt-4o': {'input': 5.00, 'output': 15.00, 'cached': 2.50},  # 50% off cached
-            'gpt-4o-mini': {'input': 0.150, 'output': 0.600, 'cached': 0.075},  # 50% off
-            'gpt-4o-2024-11-20': {'input': 2.50, 'output': 10.00, 'cached': 1.25},  # 50% off
-            'gpt-4.1': {'input': 2.00, 'output': 10.00, 'cached': 0.50},  # 75% off
-            'gpt-4.1-mini': {'input': 0.40, 'output': 1.60, 'cached': 0.10},  # 75% off
-            'gpt-4.1-nano': {'input': 0.10, 'output': 0.40, 'cached': 0.025},  # 75% off
-            'gpt-5': {'input': 10.00, 'output': 30.00, 'cached': 5.00},  # 50% off (estimated)
-            'gpt-5-mini': {'input': 0.25, 'output': 1.00, 'cached': 0.125},  # 50% off (estimated)
-            'gpt-5-nano': {'input': 0.10, 'output': 0.40, 'cached': 0.050},  # 50% off (estimated)
-            'gpt-5.1': {'input': 15.00, 'output': 60.00, 'cached': 7.50},  # 50% off (estimated; retained for historical cost rows)
-            'gpt-5.4': {'input': 2.50, 'output': 15.00, 'cached': 0.25},  # Azure Sweden Standard (Apr 2026)
-            'gpt-3.5-turbo': {'input': 0.50, 'output': 1.50, 'cached': 0.25},  # 50% off
-            # Anthropic (no caching support yet)
-            'claude-3-opus-20240229': {'input': 15.00, 'output': 75.00, 'cached': 15.00},
-            'claude-3-sonnet-20240229': {'input': 3.00, 'output': 15.00, 'cached': 3.00},
-            'claude-3-haiku-20240307': {'input': 0.25, 'output': 1.25, 'cached': 0.25},
-        }
-        
-        # Get pricing for current model (default to gpt-4o-mini if unknown)
-        model_pricing = pricing.get(self.model_name, pricing['gpt-4o-mini'])
-        
-        # Calculate cost with cache discount
-        uncached_tokens = prompt_tokens - cached_tokens
-        uncached_cost = (uncached_tokens / 1_000_000) * model_pricing['input']
-        cached_cost = (cached_tokens / 1_000_000) * model_pricing.get('cached', model_pricing['input'])
-        output_cost = (completion_tokens / 1_000_000) * model_pricing['output']
-        
-        total_cost = uncached_cost + cached_cost + output_cost
+        # Pricing pulled from the single source of truth (backend/core/ai/pricing.py).
+        # Keep additions/corrections THERE — adding prices here would reintroduce
+        # the drift that hid a 50% undercount of gpt-5-mini for months.
+        from backend.core.ai.pricing import compute_cost
+        total_cost = compute_cost(
+            model_name=self.model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+        )
         
         # Update tracking
         self.total_prompt_tokens += prompt_tokens

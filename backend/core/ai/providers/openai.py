@@ -36,34 +36,13 @@ class OpenAIProvider(BaseLLMProvider):
             api_key=api_key
         )
         
-        # Pricing (per 1M tokens, updated Nov 2025)
-        self.pricing = {
-            # GPT-4 series
-            "gpt-4o-mini": {"input": 0.150, "output": 0.600},
-            "gpt-4o": {"input": 2.50, "output": 10.00},
-            "gpt-4o-2024-11-20": {"input": 2.50, "output": 10.00},
-            
-            # GPT-4.1 series (better prompt caching: 75% off cached tokens)
-            "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
-            "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
-            "gpt-4.1": {"input": 2.00, "output": 8.00},
-            
-            # GPT-5 series (released August 2025)
-            "gpt-5-nano": {"input": 0.05, "output": 0.40},
-            "gpt-5-mini": {"input": 0.25, "output": 2.00},
-            "gpt-5": {"input": 1.25, "output": 10.00},
-            "gpt-5.1": {"input": 1.25, "output": 10.00},  # GPT-5.1 (Nov 2025)
-            "gpt-5.1-instant": {"input": 1.00, "output": 8.00},
-            "gpt-5.1-thinking": {"input": 1.50, "output": 12.00},
-            "gpt-5.4": {"input": 2.50, "output": 15.00},  # Azure Sweden Standard (Apr 2026)
-            
-            # o1 series (reasoning models)
-            "o1-preview": {"input": 15.00, "output": 60.00},
-            "o1-mini": {"input": 3.00, "output": 12.00},
-        }
-        
+        # Pricing pulled from the shared source of truth — never maintain
+        # a second copy here; see backend/core/ai/pricing.py.
+        from backend.core.ai.pricing import MODEL_PRICING
+        self.pricing = MODEL_PRICING
+
         if model not in self.pricing:
-            logger.warning(f"Unknown model {model}, using gpt-4o-mini pricing")
+            logger.warning(f"Unknown model {model}, using fallback pricing")
     
     async def _complete_impl(
         self, 
@@ -145,8 +124,11 @@ class OpenAIProvider(BaseLLMProvider):
     
     def calculate_cost(self, usage: TokenUsage) -> float:
         """Calculate cost based on token usage."""
-        pricing = self.pricing.get(self.model, self.pricing["gpt-4o-mini"])
-        input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
-        output_cost = (usage.completion_tokens / 1_000_000) * pricing["output"]
-        return input_cost + output_cost
+        from backend.core.ai.pricing import compute_cost
+        return compute_cost(
+            model_name=self.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=getattr(usage, "cached_tokens", 0) or 0,
+        )
 

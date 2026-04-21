@@ -136,8 +136,8 @@ providers:
 # Model -> Provider mapping
 models:
   # Route newer models to Sweden
-  gpt-5.1: azure_sweden
-  gpt-5-pro: azure_sweden
+  gpt-5.4: azure_sweden
+  gpt-5.4-mini: azure_sweden
 
   # Route standard models to West Europe
   gpt-5-mini: azure_west_europe
@@ -154,7 +154,7 @@ default: azure_west_europe
 
 ### How Routing Works
 
-When the code requests a model (e.g., `gpt-5.1`):
+When the code requests a model (e.g., `gpt-5.4`):
 
 1. Looks up model in `llm_endpoints.yaml` → finds `azure_sweden`
 2. Gets provider config → endpoint from `AZURE_OPENAI_SWEDEN_ENDPOINT`
@@ -253,8 +253,8 @@ providers:
 
 models:
   # Premium models → Sweden
-  gpt-5.1: azure_sweden
-  gpt-5-pro: azure_sweden
+  gpt-5.4: azure_sweden
+  gpt-5.4-mini: azure_sweden
 
   # Standard models → West Europe
   gpt-4o: azure_west_europe

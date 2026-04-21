@@ -469,7 +469,7 @@ class UnifiedTwoStageClassifier:
         try:
             stage_1_result = await asyncio.wait_for(
                 stage_1_classifier.classify(email, sender_history),
-                timeout=60.0  # Increased from 30s - some emails are long/complex
+                timeout=120.0  # Was 60s; gpt-5.4-mini reasoning can spike past 30s on long prompts
             )
             # Accumulate Stage 1 costs
             stage_1_stats = stage_1_classifier.get_usage_stats()
@@ -480,7 +480,7 @@ class UnifiedTwoStageClassifier:
         except asyncio.TimeoutError:
             logger.error(f"Stage 1 timeout for email {email.message_id}, using fallback classification")
             # Return fallback classification (similar to AIClassifier.classify fallback)
-            stage_1_result = self._create_fallback_classification(email, "Stage 1 timeout after 30s")
+            stage_1_result = self._create_fallback_classification(email, "Stage 1 timeout after 120s")
         except Exception as e:
             logger.error(f"Stage 1 failed for email {email.message_id}: {e}, using fallback classification")
             # Return fallback classification
@@ -544,7 +544,7 @@ class UnifiedTwoStageClassifier:
         try:
             stage_2_result = await asyncio.wait_for(
                 stage_2_classifier.classify(email, sender_history),
-                timeout=60.0
+                timeout=120.0  # Matches Stage 1; gpt-5.4 is slower than mini
             )
             # Accumulate Stage 2 costs
             stage_2_stats = stage_2_classifier.get_usage_stats()

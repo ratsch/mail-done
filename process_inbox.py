@@ -689,6 +689,7 @@ class EmailProcessingPipeline:
                         'needs_reply': ai_classification.needs_reply,
                         'is_cold_email': ai_classification.is_cold_email,
                         'deadline': getattr(ai_classification, 'deadline', None),
+                        'deadline_consequence': getattr(ai_classification, 'deadline_consequence', None),
                         'event_date': getattr(ai_classification, 'event_date', None),
                         'location': getattr(ai_classification, 'location', None),
                         'time_commitment_hours': getattr(ai_classification, 'time_commitment_hours', None),
@@ -816,7 +817,25 @@ class EmailProcessingPipeline:
                 result['executed'].append(f"Applied VIP color {vip_action.color}")
             elif self.dry_run:
                 result['dry_run_actions'].append(f"Would apply VIP color {vip_action.color}")
-        
+
+        # URGENCY OVERRIDE (rule branch):
+        # Even if a rule matched, if the AI classifier flagged this email
+        # as deadline-critical (urgency_score >= 8), suppress the rule's
+        # move/archive and replace with a red flag so the email stays
+        # visible in INBOX. This mirrors the override in the AI branch
+        # (_create_action_from_ai_category) and closes the hole where a
+        # sender-/subject-based rule could silently file a deadline email.
+        if rule_action and ai_classification:
+            urgency_score = getattr(ai_classification, 'urgency_score', None) or 0
+            if urgency_score >= 8 and rule_action.type in ('move', 'archive'):
+                logger.info(
+                    f"URGENCY OVERRIDE (rule): ai_category={ai_classification.category!r} "
+                    f"urgency_score={urgency_score} → suppressing rule {rule_action.type} "
+                    f"(folder={getattr(rule_action, 'folder', None)!r}), red flag + keep in INBOX"
+                )
+                result['urgency_override'] = True
+                rule_action = EmailAction(type='color', color=1)
+
         if rule_action:
             executed, cross_account_info = await self._execute_action_with_info(email.uid, rule_action, imap)
             if executed:
@@ -873,7 +892,7 @@ class EmailProcessingPipeline:
         #       This prevents spam/marketing from being moved to MD/Marketing etc.
         #       Emails stay in Junk unless a rule explicitly rescues them.
         if ai_classification and not rule_action and self.ai_category_actions:
-            ai_action = self._create_action_from_ai_category(ai_classification.category)
+            ai_action = self._create_action_from_ai_category(ai_classification)
             if ai_action:
                 # In junk folders: skip AI moves for spam/marketing, allow others (receipts, notifications)
                 # This rescues legitimate emails while keeping actual spam in Junk
@@ -1055,6 +1074,7 @@ class EmailProcessingPipeline:
                 'ai_category': ai_classification.category, 'needs_reply': ai_classification.needs_reply,
                 'urgency': ai_classification.urgency, 'urgency_score': ai_classification.urgency_score,
                 'deadline': ai_classification.deadline, 'reply_deadline': ai_classification.reply_deadline,
+                'deadline_consequence': getattr(ai_classification, 'deadline_consequence', None),
             }
             tracking = asyncio.run(response_tracker.analyze_and_track(db_email, ai_metadata, result.get('vip_level')))
             
@@ -1128,24 +1148,47 @@ class EmailProcessingPipeline:
                 return True
         return False
     
-    def _create_action_from_ai_category(self, category: str) -> Optional[EmailAction]:
+    def _create_action_from_ai_category(self, ai_classification) -> Optional[EmailAction]:
         """
         Create an EmailAction from an AI-classified category.
-        
+
+        URGENCY OVERRIDE: If urgency_score >= 8 (deadline-critical), we
+        short-circuit the category-based move rule and instead flag the
+        email red while keeping it in the INBOX. The previous behaviour —
+        silently moving grant-modification/grant-other/work-admin/etc. to
+        their topic folder regardless of urgency — made hard-deadline
+        emails invisible and was how the SNSF + Swiss AI Initiative
+        deadlines on 10.04 / 16.04.2026 slipped through.
+
         SECURITY: Strict whitelist enforcement
         - Only uses categories explicitly defined in config/ai_category_actions.yaml
         - Only moves to folders approved in the mapping file
         - Rejects any category not in whitelist
-        
+
         Args:
-            category: AI classification category (e.g., "invitation-speaking")
-            
+            ai_classification: AIClassificationResult (full object so we can
+                read urgency_score in addition to category)
+
         Returns:
-            EmailAction if category is whitelisted, None otherwise
+            EmailAction if category is whitelisted OR urgency overrides, None otherwise
         """
         if not self.ai_category_actions:
             return None
-        
+
+        category = ai_classification.category if ai_classification else None
+        urgency_score = getattr(ai_classification, 'urgency_score', None) or 0
+
+        # URGENCY OVERRIDE (pre-empts category move rules):
+        # When the classifier reports a hard deadline with user-action
+        # required (urgency_score >= 8), KEEP the email in INBOX and mark
+        # it with a red flag so it cannot be missed.
+        if urgency_score >= 8:
+            logger.info(
+                f"URGENCY OVERRIDE: category={category!r} urgency_score={urgency_score} "
+                f"→ red flag + keep in INBOX (category move suppressed)"
+            )
+            return EmailAction(type='color', color=1)
+
         # SECURITY CHECK 1: Category must be explicitly in mapping (no fuzzy matching)
         if category not in self.ai_category_actions:
             # Try default fallback
@@ -1187,7 +1230,13 @@ class EmailProcessingPipeline:
             # All checks passed - create action
             # Check for cross-account routing (e.g., MD/Personal → personal account)
             target_account = action_config.get('target_account')
-            action = EmailAction(type='move', folder=folder, target_account=target_account)
+            # A move action may also carry a `color` key in the YAML
+            # (e.g., publication-revision-request → move to MD/Publications
+            # AND flag yellow). Previously the color was silently dropped
+            # because the executor only dispatched on action.type. We now
+            # carry it through and apply it after the successful move.
+            color = action_config.get('color')
+            action = EmailAction(type='move', folder=folder, color=color, target_account=target_account)
             action._ai_generated = True  # Mark as AI-generated (no auto-create folders)
             return action
         
@@ -1315,6 +1364,22 @@ class EmailProcessingPipeline:
                 if action.folder == self._current_folder:
                     logger.debug(f"Skipping move: already in {action.folder}")
                     return True, f"ALREADY_IN:{action.folder}"
+
+                # Apply color BEFORE moving (same-account AND cross-account).
+                # IMAP preserves flags across COPY/MOVE, so setting the flag
+                # on the source message makes it land on the destination with
+                # the flag intact. Lets a single rule combine move + color
+                # (e.g., personal-health → personal account + yellow flag,
+                # publication-revision-request → MD/Publications + yellow).
+                if action.color:
+                    if imap.apply_color_label(uid, action.color):
+                        self.stats['actions_taken']['color'] += 1
+                        self.stats['colors_applied'][action.color] += 1
+                    else:
+                        logger.warning(
+                            f"Pre-move color application failed for UID {uid} "
+                            f"(color={action.color}); proceeding with move"
+                        )
 
                 # Apply default_move_target if no explicit target_account
                 if not action.target_account and self.account_manager:
@@ -1459,7 +1524,7 @@ class EmailProcessingPipeline:
                 else:
                     # Safety: AI-generated actions cannot auto-create folders unless --create-folders is set
                     create_if_missing = not getattr(action, '_ai_generated', False)
-                
+
                 success = imap.move_to_folder(uid, action.folder, create_if_missing=create_if_missing)
                 if success:
                     self.stats['actions_taken']['move'] += 1

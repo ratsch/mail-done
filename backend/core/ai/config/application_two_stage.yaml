@@ -19,7 +19,7 @@
 # Simple format is equivalent to: recommendation_score >= threshold with operator="or"
 
 # Models (provider auto-detected from llm_endpoints.yaml based on model name)
-fast_model: "gpt-5-mini"      # Stage 1: Fast classification -> azure_west_europe
+fast_model: "gpt-5.4-mini"    # Stage 1: Fast classification (upgraded 2026-04-21) -> azure_sweden
 detailed_model: "gpt-5.4"     # Stage 2: Detailed scoring -> azure_sweden
 
 # Thresholds - Using advanced format with AND logic

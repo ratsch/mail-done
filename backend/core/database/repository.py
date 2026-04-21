@@ -521,6 +521,11 @@ class EmailRepository:
                     category_metadata['event_date'] = ai_result.event_date
                 if ai_result.deadline:
                     category_metadata['deadline'] = ai_result.deadline
+                # deadline_consequence is set whenever CRITICAL DEADLINE DETECTION
+                # triggers in the classifier prompt (category-agnostic).
+                # Queryable → metadata tier, not PII.
+                if getattr(ai_result, 'deadline_consequence', None):
+                    category_metadata['deadline_consequence'] = ai_result.deadline_consequence
                 if ai_result.location:
                     category_data['location'] = ai_result.location  # Could contain PII
                 if ai_result.time_commitment_hours:

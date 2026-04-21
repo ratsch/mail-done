@@ -12,7 +12,7 @@
 # - Hidden urgent emails in work-colleague/student/admin categories
 
 # Models
-fast_model: "gpt-5-mini"      # Stage 1: Fast classification
+fast_model: "gpt-5.4-mini"    # Stage 1: Fast classification (upgraded from gpt-5-mini 2026-04-21)
 detailed_model: "gpt-5.4"        # Stage 2: Urgency verification
 
 # Trigger criteria (run Stage 2 if ANY condition matches)
@@ -36,7 +36,24 @@ stage_2_criteria:
   
   work-other:
     urgency_score: 8
-  
+
+  # 2b. Grant categories — deadline-critical by nature.
+  # Grants have hard SNSF/funder deadlines; missing them is irreversible
+  # (proposal not considered, funding forfeited). Stage-1 routinely
+  # under-scores routine-sounding subjects like "Request for revision"
+  # even when the body says "will not be considered if deadline missed".
+  # Verify at any urgency ≥5 to catch borderline cases.
+  grant-modification:
+    urgency_score: 5
+  grant-reporting:
+    urgency_score: 5
+  grant-budget:
+    urgency_score: 5
+  grant-other:
+    urgency_score: 5
+  grant-submission-confirm:
+    urgency_score: 7  # confirmations rarely have deadlines, verify only if high
+
   # Note: This catches the "hidden" urgent emails that are:
   # - Classified as regular work (not work-urgent)
   # - But have high urgency scores (≥8)

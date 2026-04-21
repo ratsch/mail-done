@@ -30,15 +30,13 @@ class AnthropicProvider(BaseLLMProvider):
             anthropic_api_key=api_key
         )
         
-        # Pricing (per 1M tokens, as of Nov 2024)
-        self.pricing = {
-            "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
-            "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
-            "claude-3-opus-20240229": {"input": 15.00, "output": 75.00},
-        }
-        
+        # Pricing pulled from the shared source of truth — never maintain
+        # a second copy here; see backend/core/ai/pricing.py.
+        from backend.core.ai.pricing import MODEL_PRICING
+        self.pricing = MODEL_PRICING
+
         if model not in self.pricing:
-            logger.warning(f"Unknown model {model}, using claude-3-haiku pricing")
+            logger.warning(f"Unknown model {model}, using fallback pricing")
     
     async def _complete_impl(
         self, 
@@ -97,11 +95,11 @@ class AnthropicProvider(BaseLLMProvider):
     
     def calculate_cost(self, usage: TokenUsage) -> float:
         """Calculate cost based on token usage."""
-        pricing = self.pricing.get(
-            self.model, 
-            self.pricing["claude-3-haiku-20240307"]
+        from backend.core.ai.pricing import compute_cost
+        return compute_cost(
+            model_name=self.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=getattr(usage, "cached_tokens", 0) or 0,
         )
-        input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
-        output_cost = (usage.completion_tokens / 1_000_000) * pricing["output"]
-        return input_cost + output_cost
 

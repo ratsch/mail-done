@@ -440,7 +440,7 @@ class TestIntegration:
             },
             "models": {
                 "gpt-5.4": "azure_sweden",
-                "gpt-5-pro": "azure_sweden",
+                "gpt-5.4-mini": "azure_sweden",
                 "gpt-5-mini": "azure_west_europe",
                 "text-embedding-3-small": "azure_west_europe"
             },
