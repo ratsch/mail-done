@@ -63,6 +63,10 @@ class VIPManager:
             self.config_path = config_path
         self.vips: Dict[str, Set[str]] = {}  # level -> set of email addresses
         self.vip_domains: Dict[str, Set[str]] = {}  # level -> set of domains
+        # Senders whose emails always trigger a push notification,
+        # regardless of classifier content analysis. Distinct from VIP
+        # tiers (which drive color flagging).
+        self.notify_senders: Set[str] = set()
         self.settings: Dict = {}
         self._load_vip_config()
     
@@ -93,16 +97,24 @@ class VIPManager:
                 domains = vip_domains.get(level, [])
                 self.vip_domains[level] = {d.lower() for d in domains if d}
             
+            # Load unconditional-notify sender list (orthogonal to VIP tiers)
+            notify_senders = config.get('notify_senders', []) or []
+            self.notify_senders = {s.lower() for s in notify_senders if s}
+
             # Load settings
             self.settings = config.get('vip_settings', {})
-            
+
             total_vips = sum(len(v) for v in self.vips.values())
-            logger.info(f"Loaded {total_vips} VIP senders from {self.config_path}")
-            
+            logger.info(
+                f"Loaded {total_vips} VIP senders and {len(self.notify_senders)} "
+                f"notify senders from {self.config_path}"
+            )
+
         except Exception as e:
             logger.error(f"Failed to load VIP config from {self.config_path}: {e}")
             self.vips = {'urgent': set(), 'high': set(), 'medium': set()}
             self.vip_domains = {'urgent': set(), 'high': set(), 'medium': set()}
+            self.notify_senders = set()
             self.settings = {}
     
     def check_vip(self, email: ProcessedEmail) -> Optional[VIPInfo]:
@@ -218,6 +230,17 @@ class VIPManager:
         
         return rules
     
+    def is_notify_sender(self, sender: str) -> bool:
+        """True if the given address is on the always-notify list.
+
+        The match is case-insensitive on the exact address only; no domain
+        or wildcard matching, since these are specifically chosen individuals
+        (senior colleagues, key contacts) whose emails should never be missed.
+        """
+        if not sender:
+            return False
+        return sender.lower() in self.notify_senders
+
     def is_vip(self, sender: str) -> bool:
         """
         Quick check if sender is any VIP level.

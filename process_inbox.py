@@ -674,6 +674,21 @@ class EmailProcessingPipeline:
                     if not ai_classification.applicant_name and curated_sender_name:
                         ai_classification.applicant_name = curated_sender_name
                         logger.info(f"Populated empty applicant_name with curated_sender_name: {curated_sender_name}")
+
+                # Sender-based notify override: a small set of senders
+                # (senior colleagues, key contacts — see `notify_senders`
+                # in vip_senders.yaml) should ALWAYS trigger a
+                # notification regardless of the classifier's content
+                # analysis. Deterministic, not subject to prompt drift.
+                if ai_classification and self.vip_manager and self.vip_manager.is_notify_sender(email.from_address):
+                    if not ai_classification.notify_worthy:
+                        sender_display = (email.from_name or email.from_address).strip() or email.from_address
+                        ai_classification.notify_worthy = True
+                        ai_classification.notify_reason = f"Email from {sender_display}"
+                        logger.info(
+                            f"Notify override: {email.from_address} is on notify_senders list "
+                            f"(reason={ai_classification.notify_reason!r})"
+                        )
                 
                 # Get two-stage metadata if available (for DB storage)
                 stage_2_triggered = False
