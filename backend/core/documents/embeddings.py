@@ -218,27 +218,30 @@ class DocumentEmbeddingService:
                 error_str = str(e)
                 # Check if this is a token limit error
                 if "maximum context length" in error_str and "tokens" in error_str:
-                    # Parse the actual token count from error message
-                    # Format: "you requested 8336 tokens"
+                    # Try to parse actual token count ("you requested N tokens").
+                    # Newer OpenAI responses omit the count, so fall back to a
+                    # conservative 0.7x shrink when we can't derive a ratio.
                     match = re.search(r'you requested (\d+) tokens', error_str)
                     if match:
                         requested_tokens = int(match.group(1))
-                        # Calculate reduction ratio needed
                         ratio = TOKEN_LIMIT / requested_tokens * 0.9  # 10% safety margin
-                        new_length = int(len(current_text) * ratio)
+                    else:
+                        ratio = 0.7
+                    new_length = int(len(current_text) * ratio)
 
-                        if attempt < MAX_EMBEDDING_RETRIES - 1 and new_length > 100:
-                            logger.warning(
-                                f"Token limit exceeded ({requested_tokens} tokens), "
-                                f"truncating from {len(current_text)} to {new_length} chars (attempt {attempt + 1})"
-                            )
-                            # Truncate at word boundary
-                            current_text = current_text[:new_length]
-                            last_space = current_text.rfind(' ')
-                            if last_space > new_length * 0.8:
-                                current_text = current_text[:last_space]
-                            current_text += "..."
-                            continue
+                    if attempt < MAX_EMBEDDING_RETRIES - 1 and new_length > 100:
+                        logger.warning(
+                            f"Token limit exceeded, truncating from "
+                            f"{len(current_text)} to {new_length} chars "
+                            f"(attempt {attempt + 1}, ratio={ratio:.2f})"
+                        )
+                        # Truncate at word boundary
+                        current_text = current_text[:new_length]
+                        last_space = current_text.rfind(' ')
+                        if last_space > new_length * 0.8:
+                            current_text = current_text[:last_space]
+                        current_text += "..."
+                        continue
 
                 # Re-raise if not a token limit error or out of retries
                 raise
