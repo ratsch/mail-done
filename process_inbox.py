@@ -838,38 +838,11 @@ class EmailProcessingPipeline:
                     if self.generate_drafts and ai_classification:
                         self._sync_generate_drafts(session, _db_email, email, ai_classification, result)
 
-                    # Step 8.5: Emit notification for notify-worthy emails.
-                    # The send_notification helper is a no-op unless the classifier
-                    # set notify_worthy=true. It dedupes via metadata, rate-limits
-                    # per account, and never raises (log-only on failure).
-                    if ai_classification and not self.actions_only:
-                        try:
-                            from backend.core.notifications.notify import send_notification
-                            from backend.core.database.models import EmailMetadata as _EM
-                            _metadata_row = (
-                                session.query(_EM)
-                                .filter(_EM.email_id == _db_email.id)
-                                .first()
-                            )
-                            notify_msg_id = send_notification(
-                                db=session,
-                                account_id=self.account_id,
-                                email_metadata=_metadata_row,
-                                email_db_row=_db_email,
-                                ai_classification=ai_classification,
-                                stage_2_triggered=stage_2_triggered,
-                                dry_run=self.dry_run,
-                            )
-                            if notify_msg_id:
-                                self.stats['notifications_sent'] = (
-                                    self.stats.get('notifications_sent', 0) + 1
-                                )
-                                result['notification_sent'] = notify_msg_id
-                        except Exception as notify_e:
-                            logger.warning(
-                                f"send_notification failed for {_db_email.id}: {notify_e}",
-                                exc_info=True,
-                            )
+                    # Notification emission deliberately deferred — see below,
+                    # AFTER the main transaction commits. This avoids the
+                    # failure window where SMTP succeeds but a rollback
+                    # undoes the dedup flag → duplicate notification on
+                    # retry.
 
                     # All operations successful, commit the transaction
                     session.commit()
@@ -889,6 +862,36 @@ class EmailProcessingPipeline:
             if db_email:
                 self.stats['db_stored'] += 1
                 result['db_stored'] = True
+
+                # Step 8.5 (outside the main transaction): emit notification.
+                # send_notification opens its own session so the SMTP send
+                # and the dedup-flag commit happen AFTER the main commit.
+                # This keeps the "duplicate on retry" window closed: an SMTP
+                # success followed by a rollback of the main transaction
+                # would otherwise leave Slack with a message but no dedup
+                # record, causing a re-send on the next pass.
+                if ai_classification and not self.actions_only:
+                    try:
+                        from backend.core.notifications.notify import send_notification
+                        notify_msg_id = await asyncio.to_thread(
+                            send_notification,
+                            account_id=self.account_id,
+                            email_id=db_email.id,
+                            ai_classification=ai_classification,
+                            stage_2_triggered=stage_2_triggered,
+                            vip_manager=self.vip_manager,
+                            dry_run=self.dry_run,
+                        )
+                        if notify_msg_id:
+                            self.stats['notifications_sent'] = (
+                                self.stats.get('notifications_sent', 0) + 1
+                            )
+                            result['notification_sent'] = notify_msg_id
+                    except Exception as notify_e:
+                        logger.warning(
+                            f"send_notification failed for {db_email.id}: {notify_e}",
+                            exc_info=True,
+                        )
         
         # Step 9: Execute Actions
         if vip_action:

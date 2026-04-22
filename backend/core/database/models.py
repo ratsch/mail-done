@@ -249,6 +249,13 @@ class EmailMetadata(Base):
     time_to_action_seconds = Column(Integer)  # How quickly user acted (first move from inbox)
     importance_score = Column(Integer)  # 0-10, derived from actions (trash=0, archive=5, organized=8)
     
+    # Notification pipeline (Slack push for notify_worthy emails)
+    # Timestamp column for fast cooldown / per-sender dedup queries.
+    # Kept in sync with `category_metadata['notify_sent_at']` (which is
+    # retained for historical rows that predate this column).
+    notify_sent_at = Column(DateTime, index=True)
+    notify_message_id = Column(String(255))
+
     # Timestamps
     processed_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)

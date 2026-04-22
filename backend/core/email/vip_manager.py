@@ -67,6 +67,8 @@ class VIPManager:
         # regardless of classifier content analysis. Distinct from VIP
         # tiers (which drive color flagging).
         self.notify_senders: Set[str] = set()
+        # Notification pipeline settings (cooldown, category blocklist).
+        self.notify_settings: Dict = {}
         self.settings: Dict = {}
         self._load_vip_config()
     
@@ -101,6 +103,17 @@ class VIPManager:
             notify_senders = config.get('notify_senders', []) or []
             self.notify_senders = {s.lower() for s in notify_senders if s}
 
+            # Load notification settings (cooldown, category blocklist).
+            # Normalize blocklist to lowercase for case-insensitive match.
+            raw_notify_settings = config.get('notify_settings', {}) or {}
+            blocklist = raw_notify_settings.get('category_blocklist', []) or []
+            self.notify_settings = {
+                'cooldown_minutes_per_sender': int(
+                    raw_notify_settings.get('cooldown_minutes_per_sender', 0) or 0
+                ),
+                'category_blocklist': {c.lower() for c in blocklist if c},
+            }
+
             # Load settings
             self.settings = config.get('vip_settings', {})
 
@@ -115,6 +128,7 @@ class VIPManager:
             self.vips = {'urgent': set(), 'high': set(), 'medium': set()}
             self.vip_domains = {'urgent': set(), 'high': set(), 'medium': set()}
             self.notify_senders = set()
+            self.notify_settings = {'cooldown_minutes_per_sender': 0, 'category_blocklist': set()}
             self.settings = {}
     
     def check_vip(self, email: ProcessedEmail) -> Optional[VIPInfo]:
