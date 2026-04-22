@@ -680,9 +680,20 @@ class EmailProcessingPipeline:
                 # in vip_senders.yaml) should ALWAYS trigger a
                 # notification regardless of the classifier's content
                 # analysis. Deterministic, not subject to prompt drift.
+                #
+                # Only overrides when the classifier did NOT already set
+                # notify_worthy=true — if the LLM already produced a
+                # richer reason (e.g., "SNSF revision due in 48h"),
+                # keep that instead of clobbering with "Email from X".
                 if ai_classification and self.vip_manager and self.vip_manager.is_notify_sender(email.from_address):
                     if not ai_classification.notify_worthy:
-                        sender_display = (email.from_name or email.from_address).strip() or email.from_address
+                        # Prefer the LLM-curated name (e.g., "Andreas Krause")
+                        # over raw from_name (e.g., "Krause Andreas" or blank).
+                        sender_display = (
+                            curated_sender_name
+                            or (email.from_name or "").strip()
+                            or email.from_address
+                        )
                         ai_classification.notify_worthy = True
                         ai_classification.notify_reason = f"Email from {sender_display}"
                         logger.info(
