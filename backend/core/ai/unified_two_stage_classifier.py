@@ -380,6 +380,55 @@ class UnifiedTwoStageClassifier:
         
         return None
     
+    async def _classify_with_retry(
+        self,
+        *,
+        classifier: 'AIClassifier',
+        email: ProcessedEmail,
+        sender_history: Optional[Dict],
+        timeouts: tuple,
+        stage_label: str,
+    ) -> AIClassificationResult:
+        """Classify with per-attempt timeouts and retry.
+
+        Runs up to ``len(timeouts)`` attempts, doubling or otherwise
+        increasing the timeout on each retry (callers typically pass
+        ``(120.0, 240.0)`` — first a normal budget, then a longer one
+        in case the model genuinely needs more reasoning time for a long
+        input). All failures (asyncio.TimeoutError or any classifier
+        exception) are treated as retryable; the final failure returns
+        ``_create_fallback_classification`` so callers can detect it via
+        ``confidence == 0.0 and "Fallback classification" in reasoning``.
+
+        Retries share the SAME ``classifier`` instance — its internal
+        token/cost counters accumulate across attempts.
+        """
+        last_error: str = ""
+        for attempt, timeout in enumerate(timeouts, start=1):
+            try:
+                return await asyncio.wait_for(
+                    classifier.classify(email, sender_history),
+                    timeout=float(timeout),
+                )
+            except asyncio.TimeoutError:
+                last_error = f"timeout after {timeout:.0f}s"
+                logger.warning(
+                    f"{stage_label} attempt {attempt}/{len(timeouts)} timed out "
+                    f"(limit {timeout:.0f}s) for email {email.message_id}"
+                )
+            except Exception as e:  # noqa: BLE001
+                last_error = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    f"{stage_label} attempt {attempt}/{len(timeouts)} raised "
+                    f"{type(e).__name__} for email {email.message_id}: {e}"
+                )
+        logger.error(
+            f"{stage_label} exhausted retries for email {email.message_id}: {last_error}"
+        )
+        return self._create_fallback_classification(
+            email, f"{stage_label} {last_error}"
+        )
+
     def _create_fallback_classification(self, email: ProcessedEmail, error_msg: str) -> AIClassificationResult:
         """
         Create a fallback classification when Stage 1 fails.
@@ -476,37 +525,32 @@ class UnifiedTwoStageClassifier:
             stage_2_triggered, stage_2_reason, improvements, two_stage_metadata
         """
         self.total_classified += 1
-        
+
         # Stage 1: Fast classification
         logger.info(f"Stage 1: Classifying with {self.fast_provider}/{self.fast_model}")
         stage_1_classifier = AIClassifier(
             provider=self.fast_provider,
             model=self.fast_model
         )
-        
+
         # Enable cost tracking for Stage 1
         if self._cost_session:
             stage_1_classifier.set_cost_tracker_session(self._cost_session, self._cost_source)
-        
-        try:
-            stage_1_result = await asyncio.wait_for(
-                stage_1_classifier.classify(email, sender_history),
-                timeout=120.0  # Was 60s; gpt-5.4-mini reasoning can spike past 30s on long prompts
-            )
-            # Accumulate Stage 1 costs
-            stage_1_stats = stage_1_classifier.get_usage_stats()
-            self.total_prompt_tokens += stage_1_stats.get('total_prompt_tokens', 0)
-            self.total_completion_tokens += stage_1_stats.get('total_completion_tokens', 0)
-            self.total_cost += stage_1_stats.get('total_cost_usd', 0)
-            self.total_cached_tokens += stage_1_stats.get('total_cached_tokens', 0)
-        except asyncio.TimeoutError:
-            logger.error(f"Stage 1 timeout for email {email.message_id}, using fallback classification")
-            # Return fallback classification (similar to AIClassifier.classify fallback)
-            stage_1_result = self._create_fallback_classification(email, "Stage 1 timeout after 120s")
-        except Exception as e:
-            logger.error(f"Stage 1 failed for email {email.message_id}: {e}, using fallback classification")
-            # Return fallback classification
-            stage_1_result = self._create_fallback_classification(email, f"Stage 1 error: {str(e)}")
+
+        stage_1_result = await self._classify_with_retry(
+            classifier=stage_1_classifier,
+            email=email,
+            sender_history=sender_history,
+            timeouts=(120.0, 240.0),  # first attempt, then a longer one
+            stage_label="Stage 1",
+        )
+        # Accumulate Stage 1 costs (whether or not retry fired; the
+        # classifier has cost counters that sum across attempts)
+        stage_1_stats = stage_1_classifier.get_usage_stats()
+        self.total_prompt_tokens += stage_1_stats.get('total_prompt_tokens', 0)
+        self.total_completion_tokens += stage_1_stats.get('total_completion_tokens', 0)
+        self.total_cost += stage_1_stats.get('total_cost_usd', 0)
+        self.total_cached_tokens += stage_1_stats.get('total_cached_tokens', 0)
         
         # Check if Stage 1 used fallback (confidence = 0.0)
         stage_1_error = None
@@ -558,29 +602,42 @@ class UnifiedTwoStageClassifier:
             provider=self.detailed_provider,
             model=self.detailed_model
         )
-        
+
         # Enable cost tracking for Stage 2
         if self._cost_session:
             stage_2_classifier.set_cost_tracker_session(self._cost_session, self._cost_source)
-        
-        try:
-            stage_2_result = await asyncio.wait_for(
-                stage_2_classifier.classify(email, sender_history),
-                timeout=120.0  # Matches Stage 1; gpt-5.4 is slower than mini
+
+        stage_2_result = await self._classify_with_retry(
+            classifier=stage_2_classifier,
+            email=email,
+            sender_history=sender_history,
+            timeouts=(120.0, 240.0),
+            stage_label="Stage 2",
+        )
+        stage_2_stats = stage_2_classifier.get_usage_stats()
+        self.total_prompt_tokens += stage_2_stats.get('total_prompt_tokens', 0)
+        self.total_completion_tokens += stage_2_stats.get('total_completion_tokens', 0)
+        self.total_cost += stage_2_stats.get('total_cost_usd', 0)
+        self.total_cached_tokens += stage_2_stats.get('total_cached_tokens', 0)
+
+        # If both Stage 2 attempts produced only a fallback (or None),
+        # fall back to the Stage 1 result. Preserves the pre-retry
+        # behavior where Stage 2 failure keeps Stage 1's classification.
+        stage_2_failed = stage_2_result is None or (
+            stage_2_result.confidence == 0.0
+            and "Fallback classification" in (stage_2_result.reasoning or "")
+        )
+        if stage_2_failed:
+            logger.warning(
+                f"Stage 2 failed after retries for {email.message_id}; "
+                f"using Stage 1 result"
             )
-            # Accumulate Stage 2 costs
-            stage_2_stats = stage_2_classifier.get_usage_stats()
-            self.total_prompt_tokens += stage_2_stats.get('total_prompt_tokens', 0)
-            self.total_completion_tokens += stage_2_stats.get('total_completion_tokens', 0)
-            self.total_cost += stage_2_stats.get('total_cost_usd', 0)
-            self.total_cached_tokens += stage_2_stats.get('total_cached_tokens', 0)
-        except asyncio.TimeoutError:
-            logger.warning(f"Stage 2 timeout for email {email.message_id}, using Stage 1 result")
-            # Return Stage 1 result with error metadata (partial failure handling)
-            # Combine Stage 1 and Stage 2 errors if both failed
-            combined_error = 'timeout'
+            combined_error = (
+                (stage_2_result.reasoning if stage_2_result else "Stage 2 timeout")
+                or "Stage 2 timeout"
+            )
             if stage_1_error:
-                combined_error = f"Stage 1: {stage_1_error}; Stage 2: timeout"
+                combined_error = f"Stage 1: {stage_1_error}; Stage 2: {combined_error}"
             return {
                 'stage_1_result': stage_1_result,
                 'stage_1_model': self.fast_model,
@@ -589,7 +646,7 @@ class UnifiedTwoStageClassifier:
                 'final_result': stage_1_result,
                 'stage_2_triggered': True,
                 'stage_2_reason': reason,
-                'stage_2_error': 'Stage 2 timeout',
+                'stage_2_error': combined_error,
                 'improvements': {},
                 'two_stage_metadata': {
                     'two_stage_used': True,
@@ -602,41 +659,10 @@ class UnifiedTwoStageClassifier:
                     'stage_1_scientific_excellence_score': stage_1_result.scientific_excellence_score,
                     'stage_2_model': self.detailed_model,
                     'stage_2_reason': reason,
-                    'stage_2_error': combined_error
+                    'stage_2_error': combined_error,
                 }
             }
-        except Exception as e:
-            logger.warning(f"Stage 2 failed for email {email.message_id}: {e}, using Stage 1 result")
-            # Return Stage 1 result with error metadata (partial failure handling)
-            # Combine Stage 1 and Stage 2 errors if both failed
-            combined_error = str(e)
-            if stage_1_error:
-                combined_error = f"Stage 1: {stage_1_error}; Stage 2: {str(e)}"
-            return {
-                'stage_1_result': stage_1_result,
-                'stage_1_model': self.fast_model,
-                'stage_2_result': None,
-                'stage_2_model': self.detailed_model,
-                'final_result': stage_1_result,
-                'stage_2_triggered': True,
-                'stage_2_reason': reason,
-                'stage_2_error': str(e),
-                'improvements': {},
-                'two_stage_metadata': {
-                    'two_stage_used': True,
-                    'stage_2_triggered': True,
-                    'stage_1_model': self.fast_model,
-                    'stage_1_category': stage_1_result.category,
-                    'stage_1_confidence': stage_1_result.confidence,
-                    'stage_1_urgency_score': stage_1_result.urgency_score,
-                    'stage_1_recommendation_score': stage_1_result.recommendation_score,
-                    'stage_1_scientific_excellence_score': stage_1_result.scientific_excellence_score,
-                    'stage_2_model': self.detailed_model,
-                    'stage_2_reason': reason,
-                    'stage_2_error': combined_error
-                }
-            }
-        
+
         # Combine results
         final_result = self._combine_results(stage_1_result, stage_2_result, reason)
         
