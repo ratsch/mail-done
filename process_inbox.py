@@ -768,7 +768,7 @@ class EmailProcessingPipeline:
                 self.stats['ai_failures'] += 1
         
         # Step 5-8: Database Operations (run in a separate thread to avoid blocking asyncio event loop)
-        db_email = None
+        db_email_id = None
         if self.use_database:
             
             def sync_db_operations():
@@ -844,9 +844,16 @@ class EmailProcessingPipeline:
                     # undoes the dedup flag → duplicate notification on
                     # retry.
 
-                    # All operations successful, commit the transaction
+                    # All operations successful, commit the transaction.
                     session.commit()
-                    return _db_email
+                    # Capture the primary key as a plain UUID BEFORE the
+                    # session closes. SQLAlchemy's default expire_on_commit
+                    # makes attribute access on the returned instance
+                    # trigger a refresh against the (now closed) session,
+                    # which raises DetachedInstanceError. The UUID is all
+                    # send_notification actually needs from this scope.
+                    _db_email_id = _db_email.id
+                    return _db_email_id
                 
                 except Exception as db_e:
                     logger.error(f"Database operations failed for {email.uid}: {db_e}")
@@ -857,9 +864,13 @@ class EmailProcessingPipeline:
                 finally:
                     session.close()
 
-            db_email = await asyncio.to_thread(sync_db_operations)
+            # sync_db_operations returns the email's primary key (UUID) on
+            # success and None on failure. We can no longer use the ORM
+            # instance outside the closed session, but the UUID is enough
+            # for send_notification which opens its own session.
+            db_email_id = await asyncio.to_thread(sync_db_operations)
 
-            if db_email:
+            if db_email_id:
                 self.stats['db_stored'] += 1
                 result['db_stored'] = True
 
@@ -876,7 +887,7 @@ class EmailProcessingPipeline:
                         notify_msg_id = await asyncio.to_thread(
                             send_notification,
                             account_id=self.account_id,
-                            email_id=db_email.id,
+                            email_id=db_email_id,
                             ai_classification=ai_classification,
                             stage_2_triggered=stage_2_triggered,
                             vip_manager=self.vip_manager,
@@ -889,7 +900,7 @@ class EmailProcessingPipeline:
                             result['notification_sent'] = notify_msg_id
                     except Exception as notify_e:
                         logger.warning(
-                            f"send_notification failed for {db_email.id}: {notify_e}",
+                            f"send_notification failed for {db_email_id}: {notify_e}",
                             exc_info=True,
                         )
         
@@ -2101,11 +2112,51 @@ class EmailProcessingPipeline:
                             'has_ai': 0
                         }
                         
+                        # Optional pre-filter: apply --filter-date-before /
+                        # --filter-date-after to the IMAP inventory BEFORE the
+                        # bulk-filter decision, so users can restrict a batch
+                        # by date without paying the body-fetch tax on emails
+                        # outside the window. `internal_date` comes from IMAP
+                        # INTERNALDATE (see get_message_ids_with_headers).
+                        # filter_date_after is already applied via IMAP
+                        # SEARCH SINCE — we only need to handle the BEFORE
+                        # side here.
+                        from datetime import datetime as _dt, timezone as _tz
+                        date_before_cutoff = getattr(self, 'filter_date_before', None)
+                        if date_before_cutoff is not None:
+                            kept = []
+                            dropped = 0
+                            cutoff_utc = (
+                                date_before_cutoff.astimezone(_tz.utc)
+                                if date_before_cutoff.tzinfo
+                                else date_before_cutoff.replace(tzinfo=_tz.utc)
+                            )
+                            for item in normalized_inventory:
+                                idt = item.get('internal_date')
+                                if idt is None:
+                                    kept.append(item)  # can't judge — keep
+                                    continue
+                                idt_utc = (
+                                    idt.astimezone(_tz.utc)
+                                    if idt.tzinfo
+                                    else idt.replace(tzinfo=_tz.utc)
+                                )
+                                if idt_utc > cutoff_utc:
+                                    dropped += 1
+                                else:
+                                    kept.append(item)
+                            if dropped > 0:
+                                logger.info(
+                                    f"   Date filter (before {cutoff_utc.date()}): "
+                                    f"dropped {dropped}, kept {len(kept)} of {len(normalized_inventory)}"
+                                )
+                                normalized_inventory = kept
+
                         for item in normalized_inventory:
                             msg_id = item['message_id']
                             uid = item['uid']
                             status = status_map.get(msg_id)
-                            
+
                             # If message_id not in status_map, need to process it (new email)
                             # This can happen if the message_id wasn't in the unique list or normalization mismatch
                             if status is None:

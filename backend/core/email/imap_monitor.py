@@ -363,17 +363,24 @@ class IMAPMonitor:
                     batch = messages[i:i + batch_size]
                     
                     try:
-                        # Batch fetch for efficiency
-                        fetch_data = self.client.fetch(batch, ['BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]'])
-                        
+                        # Batch fetch for efficiency. Also grab INTERNALDATE so
+                        # callers can do date-based filtering without a body
+                        # fetch per email — e.g. `--filter-date-before` in the
+                        # bulk-filter path of process_inbox.
+                        fetch_data = self.client.fetch(
+                            batch,
+                            ['BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]', 'INTERNALDATE'],
+                        )
+
                         for msg_id in batch:
                             if msg_id not in fetch_data:
                                 continue
-                            
+
                             # Extract Message-ID from header
                             raw_data = fetch_data[msg_id]
                             header_data = raw_data.get(b'BODY[HEADER.FIELDS (MESSAGE-ID)]', b'')
-                            
+                            internal_date = raw_data.get(b'INTERNALDATE')
+
                             if header_data:
                                 header_str = header_data.decode('utf-8', errors='ignore').strip()
                                 # Parse Message-ID: <value>
@@ -385,7 +392,8 @@ class IMAPMonitor:
                                         if message_id:
                                             result.append({
                                                 'uid': str(msg_id),
-                                                'message_id': message_id
+                                                'message_id': message_id,
+                                                'internal_date': internal_date,
                                             })
                         
                         if (i + batch_size) < len(messages):
