@@ -29,6 +29,56 @@ async_engine = None
 SessionLocal = None
 AsyncSessionLocal = None
 
+def _assert_embedding_dim_matches_db(conn) -> None:
+    """Fail fast if the configured EMBEDDING_DIM disagrees with the actual
+    pgvector column dimension in the DB.
+
+    pgvector stores the declared dim in ``pg_attribute.atttypmod`` for the
+    vector column. If this doesn't match ``settings.embedding_dim``, every
+    subsequent insert into ``email_embeddings`` will fail with
+    ``expected N dimensions, not M``. Catching the mismatch at boot means
+    the operator sees the real cause instead of scattered insert errors.
+
+    Skipped silently when the table doesn't exist (fresh DB pre-migration).
+    """
+    from backend.core.config import get_settings
+
+    configured = get_settings().embedding_dim
+    row = conn.execute(text("""
+        SELECT a.atttypmod AS dim
+        FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        LEFT JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE c.relname = 'email_embeddings'
+          AND a.attname = 'embedding'
+          AND NOT a.attisdropped
+          AND (n.nspname IS NULL OR n.nspname = ANY (current_schemas(FALSE)))
+        LIMIT 1
+    """)).fetchone()
+
+    if row is None:
+        # Table not yet created (fresh DB pre-migration) — nothing to check.
+        return
+
+    db_dim = int(row[0])
+    if db_dim <= 0:
+        # pgvector columns always have an explicit dim (typmod > 0). A
+        # negative/zero value means the catalog read returned something we
+        # don't understand — skip the guardrail rather than block startup.
+        logger.warning(
+            f"Skipping EMBEDDING_DIM guardrail: unexpected atttypmod={db_dim} "
+            f"on email_embeddings.embedding."
+        )
+        return
+    if db_dim != configured:
+        raise RuntimeError(
+            f"EMBEDDING_DIM mismatch: configured value is {configured} but the "
+            f"existing email_embeddings.embedding column is vector({db_dim}). "
+            f"Either set EMBEDDING_DIM={db_dim} to match the DB, or rebuild "
+            f"the DB from scratch with the new dim."
+        )
+
+
 def init_db(max_retries: int = 3, retry_delay: float = 1.0):
     """
     Initialize database engines and session factories with retry logic.
@@ -60,14 +110,15 @@ def init_db(max_retries: int = 3, retry_delay: float = 1.0):
                 echo=False,  # Set to True for SQL debugging
                 connect_args={
                     'connect_timeout': 10,  # Connection timeout (seconds)
-                    'options': '-c statement_timeout=90000'  # Query timeout (90s) - increased for vector search with filters
+                    'options': '-c statement_timeout=300000'  # Query timeout (300s) — accommodates HNSW index writes on the large document_embeddings table under concurrent load
                 }
             )
             
             # Test connection
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            
+                _assert_embedding_dim_matches_db(conn)
+
             # Async engine (for FastAPI endpoints)
             async_engine = create_async_engine(
                 DATABASE_URL_ASYNC,

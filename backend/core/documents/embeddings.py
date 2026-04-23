@@ -26,9 +26,13 @@ logger = logging.getLogger(__name__)
 MAX_EMBEDDING_RETRIES = 3
 TOKEN_LIMIT = 8192  # Model's max context length
 
-# Constants matching email embedding configuration
+# Constants matching email embedding configuration.
+# EMBEDDING_DIMENSIONS is resolved from the global Settings (EMBEDDING_DIM env
+# var, REQUIRED — no default). Kept as a module-level name for backward
+# compatibility with existing imports; value is read at module import time.
+from backend.core.config import get_settings as _get_settings
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
-EMBEDDING_DIMENSIONS = 3072
+EMBEDDING_DIMENSIONS = _get_settings().embedding_dim
 MAX_TOKENS_PER_CHUNK = 8000  # Safe limit for embedding model
 # Conservative estimate: 2.0 chars/token handles structured data (spreadsheets, tables,
 # OCR output) which have shorter tokens than prose. This prevents "max tokens exceeded" errors.
@@ -106,7 +110,9 @@ class DocumentEmbeddingService:
         if self._client is None:
             try:
                 from openai import OpenAI
-                self._client = OpenAI()
+                # Explicit timeout prevents socket-level hangs when the API
+                # half-closes the TCP connection (seen with >30MB PDFs).
+                self._client = OpenAI(timeout=60.0, max_retries=2)
             except ImportError:
                 logger.error("OpenAI client not available")
                 raise RuntimeError("OpenAI client required for embeddings")
@@ -200,7 +206,7 @@ class DocumentEmbeddingService:
             text: Text to embed
 
         Returns:
-            Embedding vector (3072 dimensions)
+            Embedding vector (EMBEDDING_DIMENSIONS dimensions, from EMBEDDING_DIM config)
         """
         if not text or not text.strip():
             raise ValueError("Cannot generate embedding for empty text")

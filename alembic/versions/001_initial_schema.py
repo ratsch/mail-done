@@ -6,12 +6,32 @@ Create Date: 2026-01-30
 
 This migration creates the complete database schema from scratch.
 For existing databases, use `alembic stamp head` instead of running this.
+
+Embedding dimension is read from the EMBEDDING_DIM env var (REQUIRED — no
+default), so a new DB instance can be bootstrapped against a different
+embedding model (e.g., 1024 for qwen3-embedding-0.6b). Dim is fixed
+per-DB-lifetime.
 """
+import os
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+
+def _require_embedding_dim() -> int:
+    """Read EMBEDDING_DIM from env. Invoked inside upgrade() so read-only
+    alembic commands (current/history/heads) don't require the env var."""
+    raw = os.environ.get("EMBEDDING_DIM")
+    if not raw:
+        raise RuntimeError(
+            "EMBEDDING_DIM environment variable is required for alembic "
+            "migrations. Set it (e.g., EMBEDDING_DIM=3072 for "
+            "text-embedding-3-large) before running `alembic upgrade`."
+        )
+    return int(raw)
+
 
 # revision identifiers, used by Alembic.
 revision: str = '001_initial'
@@ -22,6 +42,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create all tables and indexes."""
+    # Read required EMBEDDING_DIM lazily (only when the migration is actually run,
+    # not when alembic imports this module for read-only operations).
+    embedding_dim = _require_embedding_dim()
 
     # ==========================================================================
     # Core Tables
@@ -294,7 +317,7 @@ def upgrade() -> None:
     )
     op.create_index('ix_embeddings_email_id', 'email_embeddings', ['email_id'])
     # Add vector column using raw SQL (pgvector)
-    op.execute("ALTER TABLE email_embeddings ADD COLUMN embedding vector(3072) NOT NULL")
+    op.execute(f"ALTER TABLE email_embeddings ADD COLUMN embedding vector({embedding_dim}) NOT NULL")
     # Create vector index (DiskANN for large datasets, HNSW as fallback)
     op.execute("CREATE INDEX email_embeddings_diskann_idx ON email_embeddings USING diskann (embedding)")
 

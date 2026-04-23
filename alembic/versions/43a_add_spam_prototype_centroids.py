@@ -7,7 +7,7 @@ Create Date: 2026-04-23
 Stores one row per spam-campaign prototype (BCBS insurance, AAA road kit,
 future additions). Each row carries:
   - name:              unique identifier referenced by config + sweep code
-  - centroid:          normalized mean of seed-email embeddings (vector(3072))
+  - centroid:          normalized mean of seed-email embeddings (vector(EMBEDDING_DIM))
   - threshold:         cosine-distance cutoff (e.g., 0.20)
   - action_folder:     destination folder for matched emails (e.g., 'MD/Spam')
   - action_category:   ai_category to record when matched (e.g., 'spam')
@@ -22,6 +22,7 @@ future additions). Each row carries:
 Classification is a single SQL JOIN against ``email_embeddings`` using the
 existing diskann index — no Python-side vector math at sweep time.
 """
+import os
 from typing import Sequence, Union
 
 from alembic import op
@@ -32,13 +33,27 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _require_embedding_dim() -> int:
+    """Read EMBEDDING_DIM from env. Invoked inside upgrade() so read-only
+    alembic commands don't require the env var."""
+    raw = os.environ.get("EMBEDDING_DIM")
+    if not raw:
+        raise RuntimeError(
+            "EMBEDDING_DIM environment variable is required for alembic "
+            "migrations. Set it (matching migration 001's dim) before "
+            "running `alembic upgrade`."
+        )
+    return int(raw)
+
+
 def upgrade() -> None:
-    op.execute("""
+    embedding_dim = _require_embedding_dim()
+    op.execute(f"""
         CREATE TABLE IF NOT EXISTS spam_prototype_centroids (
             id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             name             varchar(100) NOT NULL UNIQUE,
             description      text,
-            centroid         vector(3072) NOT NULL,
+            centroid         vector({embedding_dim}) NOT NULL,
             threshold        double precision NOT NULL,
             action_folder    varchar(200) NOT NULL,
             action_category  varchar(50) NOT NULL,

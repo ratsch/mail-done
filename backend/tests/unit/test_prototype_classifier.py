@@ -34,6 +34,12 @@ from backend.core.ai.prototype_classifier import (
     needs_rebuild,
     rebuild_one,
 )
+from backend.core.config import get_settings
+
+# All vector-shape tests follow the configured EMBEDDING_DIM. Default is
+# 3072 (text-embedding-3-large); a test run under EMBEDDING_DIM=1024 will
+# exercise the same shape logic against a qwen3-embedding-0.6b-sized vector.
+EMBEDDING_DIM = get_settings().embedding_dim
 
 
 # ---------------------------------------------------------------------------
@@ -275,18 +281,18 @@ class TestNeedsRebuild:
 class TestCentroid:
     def test_compute_centroid_returns_unit_vector(self):
         rng = np.random.default_rng(42)
-        arr = rng.standard_normal((10, 3072)).astype(np.float32)
+        arr = rng.standard_normal((10, EMBEDDING_DIM)).astype(np.float32)
         # Input should already be normalized — do it explicitly
         arr /= np.linalg.norm(arr, axis=1, keepdims=True)
         m = _compute_centroid(arr)
-        assert m.shape == (3072,)
+        assert m.shape == (EMBEDDING_DIM,)
         assert m.dtype == np.float32
         # Unit-length (within float tolerance)
         assert abs(np.linalg.norm(m) - 1.0) < 1e-5
 
     def test_centroid_of_identical_vectors_is_that_vector(self):
         """Edge case: mean of n copies of v / |v| = v / |v|."""
-        v = np.ones(3072, dtype=np.float32) / np.sqrt(3072)
+        v = np.ones(EMBEDDING_DIM, dtype=np.float32) / np.sqrt(EMBEDDING_DIM)
         arr = np.stack([v] * 5)
         m = _compute_centroid(arr)
         np.testing.assert_allclose(m, v, atol=1e-5)
@@ -295,7 +301,7 @@ class TestCentroid:
         """Degenerate case: v + (-v) = 0; the normalization uses +1e-9 epsilon
         so we don't divide by zero. The resulting vector can be arbitrary
         direction but must not be NaN / inf."""
-        v = np.ones(3072, dtype=np.float32) / np.sqrt(3072)
+        v = np.ones(EMBEDDING_DIM, dtype=np.float32) / np.sqrt(EMBEDDING_DIM)
         arr = np.stack([v, -v])
         m = _compute_centroid(arr)
         assert not np.isnan(m).any()
@@ -338,9 +344,9 @@ class TestFetchSeedEmbeddings:
         assert n == 0
 
     def test_fetches_and_normalizes_embeddings(self):
-        # Two 3072-dim vectors, pgvector text format
-        v1 = np.ones(3072, dtype=np.float32) * 2.0  # |v1| = 2 * sqrt(3072)
-        v2 = np.ones(3072, dtype=np.float32) * 0.5  # |v2| = 0.5 * sqrt(3072)
+        # Two EMBEDDING_DIM-dim vectors, pgvector text format
+        v1 = np.ones(EMBEDDING_DIM, dtype=np.float32) * 2.0  # |v1| = 2 * sqrt(EMBEDDING_DIM)
+        v2 = np.ones(EMBEDDING_DIM, dtype=np.float32) * 0.5  # |v2| = 0.5 * sqrt(EMBEDDING_DIM)
         s1 = "[" + ",".join(f"{x:.6f}" for x in v1) + "]"
         s2 = "[" + ",".join(f"{x:.6f}" for x in v2) + "]"
 
@@ -354,15 +360,15 @@ class TestFetchSeedEmbeddings:
         )
         arr, n = _fetch_seed_embeddings(db, cfg, "m")
         assert n == 2
-        assert arr.shape == (2, 3072)
+        assert arr.shape == (2, EMBEDDING_DIM)
         # Rows must be L2-normalized (unit vectors)
         norms = np.linalg.norm(arr, axis=1)
         np.testing.assert_allclose(norms, [1.0, 1.0], atol=1e-5)
 
     def test_skips_malformed_embeddings(self):
-        """Any vector whose serialized form doesn't parse to 3072 dims is dropped."""
+        """Any vector whose serialized form doesn't parse to EMBEDDING_DIM dims is dropped."""
         bad = "[1.0, 2.0, 3.0]"  # only 3 dims
-        good = np.ones(3072, dtype=np.float32)
+        good = np.ones(EMBEDDING_DIM, dtype=np.float32)
         good_str = "[" + ",".join(f"{x:.6f}" for x in good) + "]"
 
         db = MagicMock()
@@ -374,7 +380,7 @@ class TestFetchSeedEmbeddings:
         )
         arr, n = _fetch_seed_embeddings(db, cfg, "m")
         assert n == 1
-        assert arr.shape == (1, 3072)
+        assert arr.shape == (1, EMBEDDING_DIM)
 
     def test_from_regex_included_in_where_when_set(self):
         """When from_regex is set, the SQL should match either subject OR from."""
@@ -457,7 +463,7 @@ class TestRebuildOne:
             "seed_count": 5,
         }
         # Make embeddings fetch return one vector
-        v = np.ones(3072, dtype=np.float32) / np.sqrt(3072)
+        v = np.ones(EMBEDDING_DIM, dtype=np.float32) / np.sqrt(EMBEDDING_DIM)
         vec_str = "[" + ",".join(f"{x:.6f}" for x in v) + "]"
 
         # Three sequential .execute() calls:
@@ -485,7 +491,7 @@ class TestRebuildOne:
 
         first_call = MagicMock()
         first_call.mappings.return_value.first.return_value = None  # no existing
-        v = np.ones(3072, dtype=np.float32) / np.sqrt(3072)
+        v = np.ones(EMBEDDING_DIM, dtype=np.float32) / np.sqrt(EMBEDDING_DIM)
         vec_str = "[" + ",".join(f"{x:.6f}" for x in v) + "]"
         second_call = MagicMock()
         second_call.fetchall.return_value = [(vec_str,), (vec_str,)]  # only 2 seeds

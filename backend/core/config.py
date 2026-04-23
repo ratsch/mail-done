@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
     openai_model: str = Field("gpt-4o-mini", description="OpenAI model for classification")
     openai_embedding_model: str = Field("text-embedding-3-small", description="OpenAI embedding model")
+    embedding_dim: int = Field(
+        ...,
+        description=(
+            "Dimension of the embedding vector used throughout the system "
+            "(SQLAlchemy Vector columns, shape checks, alembic migrations). "
+            "REQUIRED — no default. Must match the embedding model in use "
+            "(text-embedding-3-large=3072, text-embedding-3-small=1536, "
+            "qwen3-embedding-0.6b=1024, etc.). Fixed per-database-lifetime: "
+            "changing this value requires a fresh DB."
+        ),
+    )
     openai_temperature: float = Field(0.3, description="Temperature for classification (0-1)")
     
     # Anthropic (alternative)

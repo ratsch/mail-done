@@ -1035,7 +1035,7 @@ class EmailRepository:
                     logger.info(f"   Checked emails batch {batch_num}/{total_batches} ({len(email_map)} found so far)")
             
             # Get embeddings if requested (batch queries to avoid timeout)
-            # Note: Querying email_embeddings is slower due to Vector(3072) column
+            # Note: Querying email_embeddings is slower due to the Vector(EMBEDDING_DIM) column
             embeddings_map = {}
             if check_embeddings and email_map:
                 email_ids = [email.id for email in email_map.values()]

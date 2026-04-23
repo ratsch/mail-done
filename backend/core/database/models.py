@@ -24,6 +24,13 @@ import uuid
 # Import encryption types
 from backend.core.database.encryption import EncryptedText, EncryptedJSON
 
+# Embedding dimension is configured via the EMBEDDING_DIM env var (REQUIRED,
+# no default). Must match the dim of the embedding model in use; see
+# backend/core/config.py. Resolved at module import time — missing env var
+# causes a pydantic ValidationError before any DB operation runs.
+from backend.core.config import get_settings
+EMBEDDING_DIM = get_settings().embedding_dim
+
 # pgvector for native vector support
 try:
     from pgvector.sqlalchemy import Vector
@@ -458,12 +465,13 @@ class EmailEmbedding(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email_id = Column(UUID(as_uuid=True), ForeignKey('emails.id'), unique=True, nullable=False)
     
-    # Vector embedding (3072 dimensions for text-embedding-3-large)
+    # Vector embedding — dimension set by EMBEDDING_DIM env var (no default;
+    # 3072 for text-embedding-3-large, 1024 for qwen3-embedding-0.6b, etc.)
     # Using pgvector's Vector type for native PostgreSQL vector operations
     # UNENCRYPTED - required for vector similarity search (pgvector HNSW index)
     # Note: Encrypting would break semantic search completely (need native vector types)
     if HAS_PGVECTOR:
-        embedding = Column(Vector(3072), nullable=False)  # UNENCRYPTED - for pgvector search
+        embedding = Column(Vector(EMBEDDING_DIM), nullable=False)  # UNENCRYPTED - for pgvector search
     else:
         # Fallback to JSON if pgvector not available (dev/testing)
         embedding = Column(JSON, nullable=False)  # UNENCRYPTED

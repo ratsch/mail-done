@@ -36,6 +36,8 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
@@ -124,7 +126,8 @@ def _fetch_seed_embeddings(
 ) -> Tuple[Optional[np.ndarray], int]:
     """Run the seed-filter regex against the DB, fetch matching embeddings.
 
-    Returns ``(stacked_array[n, 3072], n)`` or ``(None, 0)`` if no matches.
+    Returns ``(stacked_array[n, D], n)`` where D is the configured embedding
+    dimension (EMBEDDING_DIM), or ``(None, 0)`` if no matches.
     """
     # Postgres regex operator is ~*, our patterns are already case-insensitive.
     # We OR the subject and from matches (from is optional).
@@ -148,12 +151,13 @@ def _fetch_seed_embeddings(
     if not rows:
         return None, 0
 
+    expected_dim = get_settings().embedding_dim
     vecs = []
     for (emb_str,) in rows:
         if not emb_str:
             continue
         v = np.fromstring(emb_str.strip("[]"), sep=",", dtype=np.float32)
-        if v.shape == (3072,):
+        if v.shape == (expected_dim,):
             vecs.append(v)
     if not vecs:
         return None, 0

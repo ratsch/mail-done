@@ -81,25 +81,52 @@ class EmbeddingGenerator:
         self.embedding_dims = {
             "text-embedding-3-small": 1536,
             "text-embedding-3-large": 3072,
-            "text-embedding-ada-002": 1536
+            "text-embedding-ada-002": 1536,
+            # Open-weights models served via TEI/vLLM/Ollama
+            "qwen3-embedding-0.6b": 1024,
+            "qwen3-embedding-4b": 2560,
+            "qwen3-embedding-8b": 4096,
+            "bge-m3": 1024,
         }
-        self.dims = self.embedding_dims.get(model, 1536)
-        
+
+        # Cross-check model dim against the configured global EMBEDDING_DIM.
+        # The DB columns, prototype shape checks, and alembic migrations are
+        # all pinned to the single EMBEDDING_DIM value per-instance — any
+        # mismatch would produce vectors the DB can't store.
+        #
+        # Unknown models are rejected outright: in practice an unknown name
+        # is always either a typo or a new model whose dim should be added
+        # to embedding_dims before use. Silently trusting the configured dim
+        # would mask typos that only surface as provider-API 4xx.
+        from backend.core.config import get_settings
+        configured_dim = get_settings().embedding_dim
+        if model not in self.embedding_dims:
+            raise ValueError(
+                f"Unknown embedding model '{model}'. Known models: "
+                f"{sorted(self.embedding_dims.keys())}. "
+                f"If this is a new model, add it to EmbeddingGenerator."
+                f"embedding_dims with its correct vector dimension."
+            )
+        model_dim = self.embedding_dims[model]
+        if model_dim != configured_dim:
+            raise ValueError(
+                f"Embedding model '{model}' produces {model_dim}-dim vectors "
+                f"but EMBEDDING_DIM is configured to {configured_dim}. "
+                f"Either set EMBEDDING_DIM={model_dim} for this instance "
+                f"or pick a model matching the configured dim."
+            )
+        self.dims = model_dim
+
         # Embedding pricing (per 1M tokens)
         self.pricing = {
             "text-embedding-3-small": 0.02,
             "text-embedding-3-large": 0.13,
             "text-embedding-ada-002": 0.10
         }
-        
+
         # Cost tracking
         self.total_tokens = 0
         self.total_cost = 0.0
-        
-        # Validate model is recognized
-        if model not in self.embedding_dims:
-            logger.warning(f"Unknown embedding model '{model}' - defaulting to 1536 dimensions. "
-                         f"Known models: {list(self.embedding_dims.keys())}")
         
         # Database cost tracking (optional, set later)
         self.db_cost_tracker = None

@@ -559,8 +559,9 @@ class TestConstants:
     """Tests for module constants."""
 
     def test_embedding_dimensions(self):
-        """Should use correct embedding dimensions."""
-        assert EMBEDDING_DIMENSIONS == 3072
+        """Should use the globally configured embedding dimension."""
+        from backend.core.config import get_settings
+        assert EMBEDDING_DIMENSIONS == get_settings().embedding_dim
 
     def test_default_model(self):
         """Should use text-embedding-3-large."""

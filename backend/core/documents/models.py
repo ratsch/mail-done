@@ -39,7 +39,7 @@ from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from backend.core.database.models import Base
+from backend.core.database.models import Base, EMBEDDING_DIM
 from backend.core.database.encryption import EncryptedText
 
 # pgvector for native vector support
@@ -249,7 +249,8 @@ class DocumentEmbedding(Base):
     """
     Vector embeddings for semantic search.
 
-    MUST match email embedding dimensions (3072 for text-embedding-3-large).
+    MUST match email embedding dimensions (EMBEDDING_DIM, required env var;
+    3072 for text-embedding-3-large, 1024 for qwen3-embedding-0.6b).
     Supports page-level and chunk-level embeddings for multi-page documents.
     """
     __tablename__ = "document_embeddings"
@@ -257,10 +258,10 @@ class DocumentEmbedding(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey('documents.id', ondelete='CASCADE'), nullable=False)
 
-    # Embedding (same dimension as email_embeddings!)
+    # Embedding — same dimension as EmailEmbedding (set by EMBEDDING_DIM config).
     # Using pgvector's Vector type for native PostgreSQL vector operations
     if HAS_PGVECTOR:
-        embedding = Column(Vector(3072), nullable=False)  # text-embedding-3-large
+        embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
     else:
         # Fallback for development if pgvector not installed
         from sqlalchemy import JSON

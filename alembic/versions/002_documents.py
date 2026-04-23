@@ -183,8 +183,18 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id')
     )
 
-    # Add vector column using raw SQL (pgvector) - 3072 dimensions for text-embedding-3-large
-    op.execute("ALTER TABLE document_embeddings ADD COLUMN embedding vector(3072) NOT NULL")
+    # Add vector column using raw SQL (pgvector). Dim comes from the
+    # REQUIRED EMBEDDING_DIM env var — no default. Must match the dim
+    # used in migration 001 (email_embeddings).
+    import os as _os
+    _raw = _os.environ.get("EMBEDDING_DIM")
+    if not _raw:
+        raise RuntimeError(
+            "EMBEDDING_DIM environment variable is required for alembic "
+            "migrations. Set it before running `alembic upgrade`."
+        )
+    _dim = int(_raw)
+    op.execute(f"ALTER TABLE document_embeddings ADD COLUMN embedding vector({_dim}) NOT NULL")
 
     # Document embeddings indexes
     op.create_index('idx_document_embeddings_document', 'document_embeddings', ['document_id'])
