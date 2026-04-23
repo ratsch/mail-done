@@ -85,7 +85,7 @@ class UnifiedSearchService:
     def __init__(
         self,
         db: Session,
-        embedding_model: str = "text-embedding-3-large",
+        embedding_model: Optional[str] = None,
         ef_search: int = 40,
     ):
         """
@@ -93,10 +93,14 @@ class UnifiedSearchService:
 
         Args:
             db: Database session
-            embedding_model: OpenAI embedding model (must match both corpora)
+            embedding_model: Embedding model identifier. If None, reads from
+                ``settings.embedding_model`` (the operator-chosen model).
             ef_search: HNSW ef_search parameter
         """
         self.db = db
+        if embedding_model is None:
+            from backend.core.config import get_settings
+            embedding_model = get_settings().embedding_model
         self.embedding_generator = EmbeddingGenerator(model=embedding_model)
         self._optimize_index_params(ef_search)
 

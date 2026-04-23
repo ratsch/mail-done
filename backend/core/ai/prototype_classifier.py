@@ -92,12 +92,17 @@ def load_prototype_config(config_path: Optional[str] = None) -> Tuple[List[Proto
     path = Path(config_path)
     if not path.exists():
         logger.info(f"No prototype config at {path} — prototype filter inactive")
-        return [], DEFAULT_EMBEDDING_MODEL, DEFAULT_TTL_DAYS
+        # Fall back to the operator-chosen embedding model; centroid rebuild
+        # will be a no-op since there are no prototypes configured.
+        return [], get_settings().embedding_model, DEFAULT_TTL_DAYS
 
     with open(path) as f:
         data = yaml.safe_load(f) or {}
 
-    embedding_model = data.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    # Default to the operator-chosen embedding model. YAML may override if a
+    # specific prototype set was trained on a different model (centroids are
+    # filtered by model at sweep time, so mixing is safe).
+    embedding_model = data.get("embedding_model", get_settings().embedding_model)
     ttl_days = int(data.get("ttl_days", DEFAULT_TTL_DAYS))
 
     prototypes: List[PrototypeConfig] = []

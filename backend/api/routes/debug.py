@@ -17,10 +17,13 @@ router = APIRouter(prefix="/api/debug", tags=["debug"])
 @router.get("/config", dependencies=[Depends(verify_api_key)])
 async def get_config_status():
     """Check configuration status"""
+    from backend.core.config import get_settings
+    settings = get_settings()
     return {
         "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
         "database_url_set": bool(os.getenv("DATABASE_URL")),
-        "embedding_model": os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+        "embedding_model": settings.embedding_model,
+        "embedding_dim": settings.embedding_dim,
     }
 
 
@@ -28,7 +31,8 @@ async def get_config_status():
 async def test_embedding_generation():
     """Test if embedding generation works"""
     try:
-        generator = EmbeddingGenerator()
+        from backend.core.config import get_settings
+        generator = EmbeddingGenerator(model=get_settings().embedding_model)
         test_query = "test query"
         embedding = generator.generate_query_embedding(test_query)
         

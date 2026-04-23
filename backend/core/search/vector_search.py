@@ -19,17 +19,23 @@ logger = logging.getLogger(__name__)
 class VectorSearch:
     """Semantic search using pgvector and HNSW indexing."""
     
-    def __init__(self, db: Session, embedding_model: str = "text-embedding-3-large", ef_search: int = 40):
+    def __init__(self, db: Session, embedding_model: Optional[str] = None, ef_search: int = 40):
         """
         Initialize vector search.
-        
+
         Args:
             db: Database session
-            embedding_model: OpenAI embedding model to use (default: text-embedding-3-large)
+            embedding_model: Embedding model identifier. If None, reads from
+                ``settings.embedding_model`` (the operator-chosen model).
+                Passing a different model is only useful for ad-hoc queries
+                against centroids trained on that model.
             ef_search: HNSW ef_search parameter for speed/accuracy tradeoff (default: 40)
                       Higher = more accurate but slower. Range: 10-200.
         """
         self.db = db
+        if embedding_model is None:
+            from backend.core.config import get_settings
+            embedding_model = get_settings().embedding_model
         self.embedding_generator = EmbeddingGenerator(model=embedding_model)
         # Optimize HNSW search parameters for better performance
         self.optimize_index_params(ef_search=ef_search)

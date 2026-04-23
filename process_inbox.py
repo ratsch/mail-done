@@ -261,8 +261,10 @@ class EmailProcessingPipeline:
         
         if self.generate_embeddings:
             try:
-                # Use text-embedding-3-large for best quality (only $8.54/year for 109K emails)
-                embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+                # Model is chosen explicitly via EMBEDDING_MODEL env var (no
+                # default — Settings raises ValidationError if missing).
+                from backend.core.config import get_settings
+                embedding_model = get_settings().embedding_model
                 self.embedding_generator = EmbeddingGenerator(model=embedding_model)
                 if self.parallel_workers > 1:
                     logger.info(f"✅ Embedding generator initialized: {embedding_model} (🚀 parallel workers: {self.parallel_workers})")

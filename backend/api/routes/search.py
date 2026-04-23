@@ -629,7 +629,11 @@ async def generate_embeddings(
     """
     def embed_task():
         """Background task to generate embeddings."""
-        generator = EmbeddingGenerator(batch_size=batch_size)
+        from backend.core.config import get_settings
+        generator = EmbeddingGenerator(
+            model=get_settings().embedding_model,
+            batch_size=batch_size,
+        )
         stats = generator.embed_all_emails(
             db=db,
             skip_existing=not force_regenerate,

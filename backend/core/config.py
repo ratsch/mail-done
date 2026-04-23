@@ -58,7 +58,17 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
     openai_model: str = Field("gpt-4o-mini", description="OpenAI model for classification")
-    openai_embedding_model: str = Field("text-embedding-3-small", description="OpenAI embedding model")
+    embedding_model: str = Field(
+        ...,
+        description=(
+            "Embedding model identifier used to generate vectors. "
+            "REQUIRED — no default. One of text-embedding-3-large, "
+            "text-embedding-3-small, text-embedding-ada-002 (OpenAI/Azure); "
+            "qwen3-embedding-0.6b, qwen3-embedding-4b, bge-m3 (local via TEI). "
+            "Must be paired with a compatible EMBEDDING_DIM and "
+            "EMBEDDING_PROVIDER."
+        ),
+    )
     embedding_dim: int = Field(
         ...,
         description=(
@@ -68,6 +78,15 @@ class Settings(BaseSettings):
             "(text-embedding-3-large=3072, text-embedding-3-small=1536, "
             "qwen3-embedding-0.6b=1024, etc.). Fixed per-database-lifetime: "
             "changing this value requires a fresh DB."
+        ),
+    )
+    tei_embedding_endpoint: Optional[str] = Field(
+        None,
+        description=(
+            "Base URL for a HuggingFace Text Embeddings Inference (TEI) "
+            "server exposing an OpenAI-compatible /v1/embeddings endpoint. "
+            "Required when EMBEDDING_PROVIDER=tei; ignored otherwise. "
+            "Example: http://tei:8080/v1"
         ),
     )
     openai_temperature: float = Field(0.3, description="Temperature for classification (0-1)")

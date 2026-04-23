@@ -101,7 +101,10 @@ class DocumentEmbeddingService:
         """
         self.repository = repository
         self._client = embedding_client
-        self.model = DEFAULT_EMBEDDING_MODEL
+        # Model is the operator-chosen embedding model (required env var,
+        # no default). DEFAULT_EMBEDDING_MODEL is kept only as a reference
+        # constant for tests / docs.
+        self.model = _get_settings().embedding_model
         self.single_embedding = single_embedding
 
     @property

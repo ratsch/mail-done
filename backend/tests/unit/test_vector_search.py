@@ -15,8 +15,10 @@ class TestEmbeddingGenerator:
     
     @pytest.fixture
     def generator(self):
-        """Create embedding generator"""
-        return EmbeddingGenerator(model="text-embedding-3-small")
+        """Create embedding generator. Uses the model that matches the
+        configured EMBEDDING_DIM so the cross-check in __init__ passes."""
+        from backend.core.config import get_settings
+        return EmbeddingGenerator(model=get_settings().embedding_model)
     
     @pytest.fixture
     def mock_email(self):
