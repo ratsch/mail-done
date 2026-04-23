@@ -3945,7 +3945,12 @@ async def main():
                     allow_cross_account_moves=args.allow_cross_account_moves,
                     preprocessing_rules=str(get_config_path("preprocessing_rules.yaml")) if not args.skip_preprocessing and not args.skip_rules and get_config_path("preprocessing_rules.yaml") else None,
                     classification_rules=str(get_config_path("classification_rules.yaml")) if not args.skip_rules and get_config_path("classification_rules.yaml") else None,
-                    vip_config=str(get_config_path("vip_senders.yaml")) if not args.skip_vip and get_config_path("vip_senders.yaml") else None,
+                    # Load VIP config if EITHER VIP detection is active OR prototype
+                    # filter is on. The notify_senders list lives in vip_senders.yaml
+                    # and the prototype-filter bypass queries it — without loading
+                    # vip_config, the bypass silently no-ops and senior-colleague
+                    # mail could be spam-moved.
+                    vip_config=str(get_config_path("vip_senders.yaml")) if (not args.skip_vip or args.apply_prototype_filter) and get_config_path("vip_senders.yaml") else None,
                     dry_run=args.dry_run or args.skip_actions,
                     use_database=not args.skip_database,
                     use_ai=not args.skip_ai,
@@ -4171,7 +4176,9 @@ async def main():
         allow_cross_account_moves=args.allow_cross_account_moves,
         preprocessing_rules=str(get_config_path("preprocessing_rules.yaml")) if not args.skip_preprocessing and not args.skip_rules and get_config_path("preprocessing_rules.yaml") else None,
         classification_rules=str(get_config_path("classification_rules.yaml")) if not args.skip_rules and get_config_path("classification_rules.yaml") else None,
-        vip_config=str(get_config_path("vip_senders.yaml")) if not args.skip_vip and get_config_path("vip_senders.yaml") else None,
+        # See note above on the parallel path: load VIP config whenever the
+        # prototype filter is enabled so the notify-sender bypass works.
+        vip_config=str(get_config_path("vip_senders.yaml")) if (not args.skip_vip or args.apply_prototype_filter) and get_config_path("vip_senders.yaml") else None,
         dry_run=args.dry_run or args.skip_actions,
         use_database=not args.skip_database,
         use_ai=not args.skip_ai,
