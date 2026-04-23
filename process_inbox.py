@@ -162,6 +162,7 @@ class EmailProcessingPipeline:
                  safe_move: bool = True,
                  create_folders: bool = False,
                  actions_only: bool = False,
+                 apply_prototype_filter: bool = False,
                  imap_timeout: int = None):
         """
         Initialize processing pipeline.
@@ -201,6 +202,7 @@ class EmailProcessingPipeline:
         self.use_ai = use_ai and AI_AVAILABLE
         self.use_two_stage = use_two_stage
         self.skip_application_stage2 = skip_application_stage2
+        self.apply_prototype_filter = apply_prototype_filter
         self.reprocess = reprocess
         self.parallel_workers = max(1, min(50, parallel_embeddings))  # Clamp to 1-50
         self.safe_move = safe_move
@@ -370,6 +372,7 @@ class EmailProcessingPipeline:
             'stage_2_triggered': 0,
             'notify_worthy': 0,
             'notifications_sent': 0,
+            'prototype_matched': 0,
             'ai_failures': 0,
             'ai_reprocessed': 0,
             'db_stored': 0,
@@ -829,7 +832,28 @@ class EmailProcessingPipeline:
                     # Step 6: Generate Embeddings (Phase 3)
                     if self.generate_embeddings and self.embedding_generator:
                         self._sync_generate_embedding(session, _db_email, result)
-                    
+
+                    # Step 6.5: Prototype-based spam classification.
+                    # Runs only when --apply-prototype-filter is set. If the
+                    # just-embedded email is within any spam-prototype
+                    # centroid's threshold, override:
+                    #   - ai_classification.category → prototype's action_category
+                    #   - result['prototype_override'] holds the destination
+                    #     folder for the action block in Step 9 to honor
+                    # Skipped when no embedding was generated this pass
+                    # (e.g., reprocess without --force-reembed) — in that
+                    # case an existing embedding from an earlier run is
+                    # used.
+                    if self.apply_prototype_filter:
+                        try:
+                            self._apply_prototype_match(
+                                session, _db_email, ai_classification, result
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Prototype check failed for {_db_email.id}: {e}"
+                            )
+
                     # Step 7: Track Responses (Phase 3)
                     if self.track_responses and ai_classification:
                         self._sync_track_response(session, _db_email, ai_classification, result)
@@ -905,6 +929,23 @@ class EmailProcessingPipeline:
                         )
         
         # Step 9: Execute Actions
+        # PROTOTYPE OVERRIDE: if the inline prototype check matched,
+        # force-move the email to the prototype's folder regardless of
+        # VIP / rule / AI actions. Applied BEFORE other actions so a VIP
+        # color doesn't get wasted on a message about to be spammed.
+        if result.get('prototype_override'):
+            po = result['prototype_override']
+            proto_action = EmailAction(type='move', folder=po['folder'])
+            proto_action._ai_generated = True  # use AI-safe folder whitelist
+            executed, info = await self._execute_action_with_info(email.uid, proto_action, imap)
+            tag = f"prototype {po['name']} d={po['distance']:.3f}"
+            if executed:
+                result['executed'].append(f"Prototype → move to {po['folder']} ({tag})")
+            elif self.dry_run:
+                result['dry_run_actions'].append(f"Would move to {po['folder']} ({tag})")
+            # Skip vip/rule/AI actions — email has been dealt with.
+            vip_action = rule_action = None
+
         if vip_action:
             executed = await self._execute_action(email.uid, vip_action, imap)
             if executed:
@@ -1078,6 +1119,158 @@ class EmailProcessingPipeline:
 
         return result
     
+    def _prototype_sweep_preloop(self, imap, folder: str) -> None:
+        """Before the main loop, sweep already-embedded emails in the folder.
+
+        Runs one SQL query against ``spam_prototype_centroids`` to find
+        all INBOX emails (for this account) whose embedding is within a
+        centroid's threshold AND aren't already marked spam. For each
+        match: IMAP move → update DB folder + metadata. Uses the same
+        IMAPMonitor instance the main loop uses.
+
+        This path handles the 5-min embedding cron's case: emails were
+        embedded by a prior run, but never passed through a classifier
+        invocation that had --apply-prototype-filter set. The main loop
+        wouldn't visit them (bulk-filter marks them already-processed).
+
+        Safe to call during a --dry-run — moves are suppressed, matches
+        are logged.
+        """
+        from backend.core.database import get_db
+        from backend.core.database.models import Email, EmailMetadata
+        from backend.core.ai.prototype_classifier import find_matches
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = next(get_db())
+        try:
+            matches = find_matches(
+                db, account_id=self.account_id, folder=folder,
+                since_days=30, limit=500,
+            )
+            if not matches:
+                return
+            print(f"🎯 Prototype pre-sweep: {len(matches)} email(s) to rescue")
+
+            for m in matches:
+                label = f"{m.prototype_name} d={m.distance:.3f}"
+                if self.dry_run:
+                    print(f"   🔍 DRY RUN: would move {m.message_id} ({label}) → {m.action_folder}")
+                    continue
+
+                # Locate UID on the server (Message-ID is authoritative — UID can shift)
+                try:
+                    imap.client.select_folder(m.folder)
+                    msgid_clean = (m.message_id or '').strip("<>")
+                    results = imap.client.search(["HEADER", "MESSAGE-ID", msgid_clean]) if msgid_clean else []
+                    if not results and m.uid and m.uid.isdigit():
+                        results = [int(m.uid)]
+                    if not results:
+                        logger.warning(f"Could not locate {m.message_id} in {m.folder} — skipping")
+                        continue
+                    uid = str(results[0])
+                    # Reset _current_folder so apply_color etc. know the source
+                    self._current_folder = m.folder
+                    if not imap.move_to_folder(uid, m.action_folder, create_if_missing=True):
+                        logger.warning(f"IMAP move failed for {m.message_id}")
+                        continue
+                except Exception as e:
+                    logger.error(f"IMAP error on pre-sweep move for {m.message_id}: {e}", exc_info=True)
+                    continue
+
+                # Update DB row + metadata
+                try:
+                    email_row = db.query(Email).filter(Email.id == m.email_id).first()
+                    if email_row:
+                        email_row.folder = m.action_folder
+                    metadata = db.query(EmailMetadata).filter(
+                        EmailMetadata.email_id == m.email_id
+                    ).first()
+                    if metadata is None:
+                        metadata = EmailMetadata(email_id=m.email_id)
+                        db.add(metadata)
+                    metadata.ai_category = m.action_category
+                    metadata.ai_reasoning = (
+                        f"Prototype override: matched {m.prototype_name} "
+                        f"(cosine distance {m.distance:.3f})"
+                    )
+                    metadata.ai_confidence = 1.0
+                    cm = dict(metadata.category_metadata or {})
+                    cm["prototype_match"] = m.prototype_name
+                    cm["prototype_distance"] = round(m.distance, 4)
+                    metadata.category_metadata = cm
+                    flag_modified(metadata, "category_metadata")
+                    db.commit()
+                    self.stats['prototype_matched'] = self.stats.get('prototype_matched', 0) + 1
+                    print(f"   🎯 Moved {m.message_id} → {m.action_folder} ({label})")
+                except Exception as e:
+                    logger.error(f"DB update failed after move for {m.email_id}: {e}", exc_info=True)
+                    db.rollback()
+        finally:
+            db.close()
+        # Restore _current_folder for the rest of the run
+        self._current_folder = folder
+
+    def _apply_prototype_match(
+        self, db_session: Session, db_email: "Email",
+        ai_classification, result: Dict,
+    ) -> None:
+        """Check this email's embedding against spam-prototype centroids.
+
+        Runs inline in the main loop right after ``_sync_generate_embedding``,
+        so the embedding is guaranteed to be in the DB. Single SQL query
+        against ``spam_prototype_centroids`` finds the closest centroid
+        within threshold (uses pgvector diskann index — fast).
+
+        On match:
+          - Sets ``ai_classification.category`` to the prototype's action
+            category (typically 'spam'), overriding any LLM verdict.
+          - Records ``result['prototype_override']`` so the action block
+            (Step 9) moves the email to the prototype's action folder
+            regardless of what rules/AI said.
+          - Marks the email metadata with the prototype match reason so
+            downstream queries can audit.
+
+        Idempotent: does nothing if no centroids are loaded, if no
+        embedding exists yet for this email, or if no prototype matches.
+        Never raises — exceptions propagate to the caller's try/except.
+        """
+        from sqlalchemy import text as _sql_text
+
+        row = db_session.execute(_sql_text("""
+            SELECT p.name, p.action_folder, p.action_category,
+                   (ee.embedding <=> p.centroid) AS distance
+            FROM email_embeddings ee
+            CROSS JOIN spam_prototype_centroids p
+            WHERE ee.email_id = :email_id
+              AND ee.embedding_model = p.embedding_model
+              AND (ee.embedding <=> p.centroid) < p.threshold
+            ORDER BY (ee.embedding <=> p.centroid)
+            LIMIT 1
+        """), {"email_id": db_email.id}).mappings().first()
+        if not row:
+            return
+
+        logger.info(
+            f"🎯 Prototype match: {row['name']} d={row['distance']:.3f} "
+            f"→ move to {row['action_folder']}"
+        )
+        # Override AI verdict so downstream storage + DB sees spam.
+        if ai_classification is not None:
+            ai_classification.category = row["action_category"]
+            ai_classification.reasoning = (
+                f"Prototype override: matched {row['name']} "
+                f"(cosine distance {row['distance']:.3f})"
+            )
+            ai_classification.confidence = 1.0
+        # Signal to Step 9 that this email should be force-moved.
+        result['prototype_override'] = {
+            'name': row['name'],
+            'folder': row['action_folder'],
+            'category': row['action_category'],
+            'distance': float(row['distance']),
+        }
+        self.stats['prototype_matched'] = self.stats.get('prototype_matched', 0) + 1
+
     def _sync_generate_embedding(self, db_session: Session, db_email: "Email", result: Dict):
         """Synchronous helper for embedding generation with smart folder-based skipping."""
         from backend.core.database.models import EmailEmbedding
@@ -1860,10 +2053,25 @@ class EmailProcessingPipeline:
             print(f"✅ Connected to {imap_config.host} (timeout: {self.imap_timeout}s)")
             if self.safe_move:
                 print(f"🔒 Safe-move enabled: Post-copy verification active")
-            
+
             # Get folders
             folders = imap.get_folder_list()
             print(f"📁 Available folders: {len(folders)}")
+
+            # Prototype-based spam sweep (single SQL, runs before the
+            # main loop). Catches already-embedded emails that match a
+            # spam-prototype centroid — i.e., emails whose embedding
+            # exists but weren't yet spam-classified (e.g., LLM misfired,
+            # or prior run didn't have --apply-prototype-filter).
+            # The inline check in process_email() handles emails that
+            # are embedded *during* this run.
+            if self.apply_prototype_filter:
+                try:
+                    await asyncio.to_thread(
+                        self._prototype_sweep_preloop, imap, folder
+                    )
+                except Exception as e:
+                    logger.warning(f"Prototype pre-loop sweep failed: {e}", exc_info=True)
             
             # Check incremental sync state (if database enabled)
             last_uid = None
@@ -2523,10 +2731,10 @@ class EmailProcessingPipeline:
         # Generate report
         elapsed = (datetime.now() - start_time).total_seconds()
         self._print_report(elapsed)
-        
+
         # Print cost summary
         self._print_cost_summary()
-        
+
         return self.stats
     
     def _print_email_card_header(self, email_num: int, total_display: str, email: ProcessedEmail):
@@ -2831,6 +3039,8 @@ class EmailProcessingPipeline:
                 sent = self.stats.get('notifications_sent', 0)
                 sent_str = f" — {sent} delivered" if sent else ""
                 print(f"   🔔 Notify-worthy: {self.stats['notify_worthy']}{sent_str}")
+            if self.stats.get('prototype_matched', 0) > 0:
+                print(f"   🎯 Prototype-matched spam: {self.stats['prototype_matched']}")
             if self.stats['ai_reprocessed'] > 0:
                 print(f"   🔄 Reprocessed: {self.stats['ai_reprocessed']}")
             if self.stats['ai_failures'] > 0:
@@ -2928,6 +3138,13 @@ async def main():
                             'Use in triage pipelines where deep application scoring is handled '
                             'separately by reprocess_applications.py. Urgency-based Stage 2 '
                             'triggers (work-*, grant-*, invitation-*) still apply.')
+    parser.add_argument('--apply-prototype-filter', action='store_true',
+                       help='After each email is embedded, check it against '
+                            'spam-prototype centroids (spam_prototype_centroids table). '
+                            'On match: override category to the prototype\'s action '
+                            'category and force-move the email to the prototype\'s '
+                            'action folder (e.g., MD/Spam), skipping all other actions. '
+                            'Rebuild centroids via scripts/rebuild_spam_prototypes.py.')
     parser.add_argument('--skip-database', action='store_true',
                        help='Skip database storage (Phase 2)')
     parser.add_argument('--reprocess', action='store_true',
@@ -3701,6 +3918,7 @@ async def main():
                     use_ai=not args.skip_ai,
                     use_two_stage=args.use_two_stage,
                     skip_application_stage2=args.skip_application_stage2,
+                    apply_prototype_filter=args.apply_prototype_filter,
                     reprocess=args.reprocess,
                     generate_embeddings=not args.skip_embeddings,
                     track_responses=not args.skip_tracking,
@@ -3926,6 +4144,7 @@ async def main():
         use_ai=not args.skip_ai,
         use_two_stage=args.use_two_stage,
         skip_application_stage2=args.skip_application_stage2,
+        apply_prototype_filter=args.apply_prototype_filter,
         reprocess=args.reprocess,
         generate_embeddings=not args.skip_embeddings,
         track_responses=not args.skip_tracking,
