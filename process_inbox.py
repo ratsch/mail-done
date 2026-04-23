@@ -1153,6 +1153,23 @@ class EmailProcessingPipeline:
 
             for m in matches:
                 label = f"{m.prototype_name} d={m.distance:.3f}"
+
+                # VIP / notify-sender guard: if the sender is on the
+                # notify_senders list (senior colleagues like Krause,
+                # Hofmann, Capkun), never silently spam-move their email
+                # regardless of embedding proximity. Pipeline continues
+                # normally; VIP flag + Slack notification still fire via
+                # the usual classifier run.
+                if (self.vip_manager
+                        and m.from_address
+                        and self.vip_manager.is_notify_sender(m.from_address)):
+                    logger.info(
+                        f"Prototype match SKIPPED for {m.from_address} "
+                        f"(on notify_senders list): {label}  "
+                        f"subj={(m.subject or '')[:60]!r}"
+                    )
+                    continue
+
                 if self.dry_run:
                     print(f"   🔍 DRY RUN: would move {m.message_id} ({label}) → {m.action_folder}")
                     continue
@@ -1248,6 +1265,22 @@ class EmailProcessingPipeline:
             LIMIT 1
         """), {"email_id": db_email.id}).mappings().first()
         if not row:
+            return
+
+        # VIP / notify-sender guard: never silently spam-move emails from
+        # senior-colleague senders (Krause / Hofmann / Capkun) even when
+        # their embedding happens to match a centroid. Let the normal
+        # classifier pipeline handle them — VIP flag + Slack notify fire
+        # as expected. Belt-and-suspenders: today's centroids are BCBS/
+        # AAA spam which are semantically nowhere near legit VIP mail,
+        # but future prototypes may change this.
+        if (self.vip_manager
+                and db_email.from_address
+                and self.vip_manager.is_notify_sender(db_email.from_address)):
+            logger.info(
+                f"🛡 Prototype match SKIPPED for {db_email.from_address} "
+                f"(notify_senders): would have been {row['name']} d={row['distance']:.3f}"
+            )
             return
 
         logger.info(
