@@ -351,4 +351,58 @@ class AccountManager:
         """Get a global setting value"""
         return self.settings.get(key, default)
 
+    def resolve_folder_role(self, account_id: str, folder: str) -> str:
+        """
+        Resolve folder role tokens like "{junk}", "{trash}", "{archive}",
+        "{inbox}", "{sent}" to the account-specific IMAP path defined in
+        accounts.yaml under `folders:`. Non-token strings pass through
+        unchanged, so existing literal paths (e.g. "MD/Spam") keep working.
+
+        Lookup order:
+          1. accounts[account_id].folders[role]       (per-account override)
+          2. global settings.folder_<role>            (FOLDER_SPAM/TRASH/ARCHIVE env)
+          3. the token string itself                  (debug last-resort)
+
+        Example:
+            # personal account has folders.junk = "Junk"
+            # gmail account   has folders.junk = "[Gmail]/Spam"
+            manager.resolve_folder_role("personal", "{junk}")  -> "Junk"
+            manager.resolve_folder_role("gmail",    "{junk}")  -> "[Gmail]/Spam"
+            manager.resolve_folder_role("personal", "MD/Spam") -> "MD/Spam"
+
+        Args:
+            account_id: The account the move is targeting (source account
+                        for same-account moves; target_account for cross).
+            folder:     The folder string from the rule/action.
+
+        Returns:
+            A concrete IMAP folder path.
+        """
+        if not folder or not (folder.startswith("{") and folder.endswith("}")):
+            return folder
+
+        role = folder[1:-1]
+        account = self.accounts.get(account_id)
+        if account and role in account.folders:
+            return account.folders[role]
+
+        # Fall back to the legacy single-folder settings so accounts
+        # without a folders.<role> entry still work exactly as before
+        # this method was introduced.
+        try:
+            from backend.core.config import get_settings
+            settings = get_settings()
+            fallback_map = {
+                "junk":    getattr(settings, "folder_spam", None),
+                "trash":   getattr(settings, "folder_trash", None),
+                "archive": getattr(settings, "folder_archive", None),
+            }
+            fallback = fallback_map.get(role)
+            if fallback:
+                return fallback
+        except Exception as e:  # noqa: BLE001 — logging only, best-effort fallback
+            logger.debug(f"resolve_folder_role fallback lookup failed: {e}")
+
+        return folder
+
 

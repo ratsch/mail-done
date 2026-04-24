@@ -283,14 +283,29 @@ class EmailProcessingPipeline:
         # Initialize components
         self.processor = EmailProcessor()
         
-        # Initialize AccountManager and CrossAccountMoveService for cross-account moves
+        # Initialize AccountManager unconditionally — it's cheap and is
+        # needed for folder role token resolution ({junk}/{trash}/{archive}),
+        # not just for cross-account moves. Keeping the cross-account
+        # service opt-in.
         self.account_manager = None
         self.cross_account_service = None
-        if self.allow_cross_account_moves:
+        try:
+            from backend.core.accounts.manager import AccountManager
+            self.account_manager = AccountManager()
+        except Exception as e:
+            logger.warning(
+                f"AccountManager init failed "
+                f"(per-account folder tokens will not resolve): {e}"
+            )
+            # Mirror the pre-patch behavior: if AccountManager is
+            # unavailable, cross-account moves can't run either.
+            if self.allow_cross_account_moves:
+                logger.warning("Disabling --allow-cross-account-moves because AccountManager is unavailable")
+                self.allow_cross_account_moves = False
+
+        if self.allow_cross_account_moves and self.account_manager:
             try:
-                from backend.core.accounts.manager import AccountManager
                 from backend.core.email.cross_account_move import CrossAccountMoveService
-                self.account_manager = AccountManager()
                 self.cross_account_service = CrossAccountMoveService(
                     self.account_manager,
                     dry_run=self.dry_run
@@ -353,13 +368,26 @@ class EmailProcessingPipeline:
                 ai_actions_config = yaml.safe_load(f)
                 if ai_actions_config:
                     self.ai_category_actions = ai_actions_config
-                    # Extract whitelist of allowed folders from mapping
+                    # Extract whitelist of allowed folders from mapping.
+                    # For folder role tokens like "{junk}" we also add the
+                    # per-account resolved path for every configured account
+                    # — the security check runs after resolution, so both
+                    # forms must be whitelisted.
                     for category, config in ai_actions_config.items():
                         if isinstance(config, dict) and config.get('action') == 'move':
                             folder = config.get('folder')
                             if folder:
                                 self.ai_allowed_folders.add(folder)
-                    
+                                if (self.account_manager
+                                        and folder.startswith("{")
+                                        and folder.endswith("}")):
+                                    for acct_id in self.account_manager.list_accounts():
+                                        resolved = self.account_manager.resolve_folder_role(
+                                            acct_id, folder
+                                        )
+                                        if resolved and resolved != folder:
+                                            self.ai_allowed_folders.add(resolved)
+
                     num_categories = len([k for k in ai_actions_config.keys() if k != 'default'])
                     num_folders = len(self.ai_allowed_folders)
                     print(f"✅ Loaded AI category actions for {num_categories} categories")
@@ -1156,6 +1184,14 @@ class EmailProcessingPipeline:
             for m in matches:
                 label = f"{m.prototype_name} d={m.distance:.3f}"
 
+                # Resolve folder role tokens like "{junk}" against the
+                # per-account folders map. Literal paths pass through.
+                action_folder = m.action_folder
+                if self.account_manager:
+                    action_folder = self.account_manager.resolve_folder_role(
+                        m.account_id, m.action_folder
+                    )
+
                 # VIP / notify-sender guard: if the sender is on the
                 # notify_senders list (senior colleagues like Krause,
                 # Hofmann, Capkun), never silently spam-move their email
@@ -1173,7 +1209,7 @@ class EmailProcessingPipeline:
                     continue
 
                 if self.dry_run:
-                    print(f"   🔍 DRY RUN: would move {m.message_id} ({label}) → {m.action_folder}")
+                    print(f"   🔍 DRY RUN: would move {m.message_id} ({label}) → {action_folder}")
                     continue
 
                 # Locate UID on the server (Message-ID is authoritative — UID can shift)
@@ -1189,7 +1225,7 @@ class EmailProcessingPipeline:
                     uid = str(results[0])
                     # Reset _current_folder so apply_color etc. know the source
                     self._current_folder = m.folder
-                    if not imap.move_to_folder(uid, m.action_folder, create_if_missing=True):
+                    if not imap.move_to_folder(uid, action_folder, create_if_missing=True):
                         logger.warning(f"IMAP move failed for {m.message_id}")
                         continue
                 except Exception as e:
@@ -1200,7 +1236,7 @@ class EmailProcessingPipeline:
                 try:
                     email_row = db.query(Email).filter(Email.id == m.email_id).first()
                     if email_row:
-                        email_row.folder = m.action_folder
+                        email_row.folder = action_folder
                     metadata = db.query(EmailMetadata).filter(
                         EmailMetadata.email_id == m.email_id
                     ).first()
@@ -1220,7 +1256,7 @@ class EmailProcessingPipeline:
                     flag_modified(metadata, "category_metadata")
                     db.commit()
                     self.stats['prototype_matched'] = self.stats.get('prototype_matched', 0) + 1
-                    print(f"   🎯 Moved {m.message_id} → {m.action_folder} ({label})")
+                    print(f"   🎯 Moved {m.message_id} → {action_folder} ({label})")
                 except Exception as e:
                     logger.error(f"DB update failed after move for {m.email_id}: {e}", exc_info=True)
                     db.rollback()
@@ -1606,17 +1642,33 @@ class EmailProcessingPipeline:
                                        imap: IMAPMonitor) -> tuple[bool, Optional[str]]:
         """
         Execute an email action on IMAP server and return execution status with cross-account info.
-        
+
         Args:
             uid: Email UID
             action: Action to execute
             imap: IMAP monitor
-            
+
         Returns:
             (success: bool, cross_account_info: Optional[str])
             cross_account_info is a formatted string if cross-account move occurred, None otherwise
             In dry-run mode, success=False but cross_account_info may still be populated for display
         """
+        # Resolve folder role tokens like "{junk}" / "{trash}" / "{archive}"
+        # against the per-account folders map from accounts.yaml. Literal
+        # paths (e.g. "MD/Spam") pass through unchanged, so configs that
+        # hard-coded folder names continue to work exactly as before.
+        if action.folder and self.account_manager:
+            account_for_resolve = action.target_account or self.account_id
+            resolved = self.account_manager.resolve_folder_role(
+                account_for_resolve, action.folder
+            )
+            if resolved != action.folder:
+                logger.debug(
+                    f"Resolved folder role '{action.folder}' -> '{resolved}' "
+                    f"(account: {account_for_resolve})"
+                )
+                action = action.model_copy(update={"folder": resolved})
+
         if self.dry_run:
             # Dry run: determine what would happen but don't execute
             # Handle "keep" action in junk folders - would rescue to INBOX
