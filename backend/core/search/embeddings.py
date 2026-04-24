@@ -155,9 +155,16 @@ class EmbeddingGenerator:
             # OpenAI client with a custom base_url. Auth is not enforced
             # by TEI by default; the OpenAI client still requires a
             # non-empty api_key string, so pass a sentinel.
+            #
+            # Only consume cfg_endpoint when llm_endpoints.yaml actually
+            # mapped this model to a tei provider. Otherwise (unmapped
+            # model falling back to yaml `default: azure`) we'd get the
+            # Azure base URL and point our "tei" client at Azure — which
+            # 404s on /v1/embeddings. Keeps single-source-of-truth on
+            # the TEI_EMBEDDING_ENDPOINT env var in that case.
             from backend.core.config import get_settings
             tei_endpoint = (
-                cfg_endpoint
+                (cfg_endpoint if cfg_provider == "tei" else None)
                 or os.getenv("TEI_EMBEDDING_ENDPOINT")
                 or get_settings().tei_embedding_endpoint
             )
