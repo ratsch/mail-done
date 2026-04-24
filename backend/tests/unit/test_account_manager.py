@@ -123,3 +123,35 @@ class TestResolveFolderRoleUnresolvable:
                    side_effect=RuntimeError("settings blew up")):
             with pytest.raises(ValueError, match="Cannot resolve folder role"):
                 mgr.resolve_folder_role("acct", "{junk}")
+
+
+class TestPipelineResolveFolder:
+    """_resolve_folder helper on EmailProcessingPipeline — the chokepoint
+    that guarantees no raw ``{role}`` token ever reaches IMAP."""
+
+    def _pipeline_with(self, account_manager):
+        """Build a bare EmailProcessingPipeline instance without running
+        __init__ (which would require IMAP/DB credentials)."""
+        from process_inbox import EmailProcessingPipeline
+        p = EmailProcessingPipeline.__new__(EmailProcessingPipeline)
+        p.account_manager = account_manager
+        p.account_id = "acct"
+        return p
+
+    def test_literal_passes_through_without_manager(self):
+        p = self._pipeline_with(account_manager=None)
+        assert p._resolve_folder("acct", "MD/Spam") == "MD/Spam"
+        assert p._resolve_folder("acct", None) is None
+        assert p._resolve_folder("acct", "") == ""
+
+    def test_token_without_manager_raises(self):
+        """Without AccountManager, a token MUST raise — silently passing
+        '{junk}' to IMAP would create a literal '{junk}' folder."""
+        p = self._pipeline_with(account_manager=None)
+        with pytest.raises(RuntimeError, match="accounts.yaml is not loaded"):
+            p._resolve_folder("acct", "{junk}")
+
+    def test_token_with_manager_delegates(self):
+        mgr = _mgr({"acct": {"folders": {"junk": "Junk"}}})
+        p = self._pipeline_with(account_manager=mgr)
+        assert p._resolve_folder("acct", "{junk}") == "Junk"

@@ -284,23 +284,30 @@ class EmailProcessingPipeline:
         self.processor = EmailProcessor()
         
         # Initialize AccountManager unconditionally — it's cheap and is
-        # needed for folder role token resolution ({junk}/{trash}/{archive}),
-        # not just for cross-account moves. Keeping the cross-account
-        # service opt-in.
+        # needed for folder role token resolution ({junk}/{trash}/{archive}
+        # etc.), not just for cross-account moves. Keeping the cross-account
+        # service itself opt-in.
+        #
+        # Missing accounts.yaml is the legacy single-account path → degrade
+        # to None silently (folder tokens will raise via _resolve_folder if
+        # they're actually used). Any other failure — malformed YAML,
+        # Pydantic validation error, bad credentials — is a config bug and
+        # must fail loudly rather than silently disable token resolution.
         self.account_manager = None
         self.cross_account_service = None
         try:
             from backend.core.accounts.manager import AccountManager
             self.account_manager = AccountManager()
-        except Exception as e:
+        except FileNotFoundError as e:
             logger.warning(
-                f"AccountManager init failed "
-                f"(per-account folder tokens will not resolve): {e}"
+                f"accounts.yaml not found — folder role tokens will be "
+                f"rejected at use. Per-account routing disabled. ({e})"
             )
-            # Mirror the pre-patch behavior: if AccountManager is
-            # unavailable, cross-account moves can't run either.
             if self.allow_cross_account_moves:
-                logger.warning("Disabling --allow-cross-account-moves because AccountManager is unavailable")
+                logger.warning(
+                    "Disabling --allow-cross-account-moves because "
+                    "accounts.yaml is not available"
+                )
                 self.allow_cross_account_moves = False
 
         if self.allow_cross_account_moves and self.account_manager:
@@ -314,7 +321,8 @@ class EmailProcessingPipeline:
             except Exception as e:
                 logger.warning(f"Failed to initialize cross-account move service: {e}")
                 self.allow_cross_account_moves = False
-        
+
+
         # Load preprocessing rules
         self.preprocessor = None
         if preprocessing_rules and Path(preprocessing_rules).exists():
@@ -369,10 +377,13 @@ class EmailProcessingPipeline:
                 if ai_actions_config:
                     self.ai_category_actions = ai_actions_config
                     # Extract whitelist of allowed folders from mapping.
-                    # For folder role tokens like "{junk}" we also add the
-                    # per-account resolved path for every configured account
-                    # — the security check runs after resolution, so both
-                    # forms must be whitelisted.
+                    # For folder role tokens ({junk}/{trash}/...) we also
+                    # add THIS run's resolved path — the security check
+                    # runs after resolution, so the resolved form must be
+                    # whitelisted. We resolve only for self.account_id
+                    # (not every account) because moves happen via this
+                    # run's IMAP connection and cannot target another
+                    # account's folder namespace anyway.
                     for category, config in ai_actions_config.items():
                         if isinstance(config, dict) and config.get('action') == 'move':
                             folder = config.get('folder')
@@ -381,10 +392,22 @@ class EmailProcessingPipeline:
                                 if (self.account_manager
                                         and folder.startswith("{")
                                         and folder.endswith("}")):
-                                    for acct_id in self.account_manager.list_accounts():
+                                    try:
                                         resolved = self.account_manager.resolve_folder_role(
-                                            acct_id, folder
+                                            self.account_id, folder
                                         )
+                                    except ValueError as e:
+                                        # Unresolvable token at load time —
+                                        # log and leave only the literal
+                                        # token in the whitelist so that
+                                        # a later use raises with full
+                                        # per-email context.
+                                        logger.warning(
+                                            f"ai_category_actions[{category}] "
+                                            f"folder={folder!r} unresolvable "
+                                            f"for account {self.account_id!r}: {e}"
+                                        )
+                                    else:
                                         if resolved and resolved != folder:
                                             self.ai_allowed_folders.add(resolved)
 
@@ -1184,13 +1207,24 @@ class EmailProcessingPipeline:
             for m in matches:
                 label = f"{m.prototype_name} d={m.distance:.3f}"
 
-                # Resolve folder role tokens like "{junk}" against the
-                # per-account folders map. Literal paths pass through.
-                action_folder = m.action_folder
-                if self.account_manager:
-                    action_folder = self.account_manager.resolve_folder_role(
-                        m.account_id, m.action_folder
-                    )
+                # Defense in depth: the prototype query scopes matches to
+                # this run's account+folder, so m.account_id MUST equal
+                # self.account_id. If it ever doesn't we'd resolve against
+                # one account's folders and move over a different account's
+                # IMAP connection — silently misrouting.
+                assert m.account_id == self.account_id, (
+                    f"prototype match account mismatch: "
+                    f"match.account_id={m.account_id!r}, "
+                    f"run.account_id={self.account_id!r} — "
+                    f"the prototype query is expected to filter by this "
+                    f"run's account. Investigate the query in "
+                    f"find_matches() before removing this assertion."
+                )
+
+                # Resolve folder role tokens via the run's account (which
+                # equals m.account_id per assertion above). _resolve_folder
+                # raises on tokens when AccountManager is unavailable.
+                action_folder = self._resolve_folder(self.account_id, m.action_folder)
 
                 # VIP / notify-sender guard: if the sender is on the
                 # notify_senders list (senior colleagues like Krause,
@@ -1618,6 +1652,32 @@ class EmailProcessingPipeline:
             logger.warning(f"Unknown action type '{action_type}' for category '{category}'")
             return None
     
+    def _resolve_folder(self, account_id: str, folder: Optional[str]) -> Optional[str]:
+        """Resolve a folder role token ("{junk}"/"{trash}"/"{archive}"/
+        "{inbox}"/"{sent}") to a concrete IMAP path via AccountManager.
+        Literal paths pass through. ``None`` returns ``None``.
+
+        Raises ``RuntimeError`` if the folder is a ``{role}`` token and
+        ``self.account_manager`` is unavailable — silently passing a raw
+        token to IMAP (with ``create_if_missing=True``) would otherwise
+        create a folder literally named ``{role}`` on the server.
+
+        Raises ``ValueError`` (from AccountManager.resolve_folder_role)
+        if the role is unknown or cannot be resolved via any fallback.
+        """
+        if not folder:
+            return folder
+        is_token = folder.startswith("{") and folder.endswith("}")
+        if not is_token:
+            return folder
+        if self.account_manager is None:
+            raise RuntimeError(
+                f"Cannot resolve folder token '{folder}': accounts.yaml is "
+                f"not loaded. Either add accounts.yaml with folder definitions, "
+                f"or replace the token with a literal folder path."
+            )
+        return self.account_manager.resolve_folder_role(account_id, folder)
+
     async def _execute_action(self,
                              uid: str,
                              action: EmailAction,
@@ -1653,15 +1713,14 @@ class EmailProcessingPipeline:
             cross_account_info is a formatted string if cross-account move occurred, None otherwise
             In dry-run mode, success=False but cross_account_info may still be populated for display
         """
-        # Resolve folder role tokens like "{junk}" / "{trash}" / "{archive}"
-        # against the per-account folders map from accounts.yaml. Literal
-        # paths (e.g. "MD/Spam") pass through unchanged, so configs that
-        # hard-coded folder names continue to work exactly as before.
-        if action.folder and self.account_manager:
+        # Resolve folder role tokens ({junk} / {trash} / {archive} / {inbox}
+        # / {sent}) via AccountManager. Literal paths pass through. Missing
+        # AccountManager + token → RuntimeError (via _resolve_folder);
+        # unknown role → ValueError (via AccountManager). Both bubble up
+        # to the per-email error handler in the outer processing loop.
+        if action.folder:
             account_for_resolve = action.target_account or self.account_id
-            resolved = self.account_manager.resolve_folder_role(
-                account_for_resolve, action.folder
-            )
+            resolved = self._resolve_folder(account_for_resolve, action.folder)
             if resolved != action.folder:
                 logger.debug(
                     f"Resolved folder role '{action.folder}' -> '{resolved}' "
