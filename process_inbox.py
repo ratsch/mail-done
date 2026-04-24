@@ -1196,9 +1196,14 @@ class EmailProcessingPipeline:
 
         db = next(get_db())
         try:
+            # `--reprocess` disables the 30-day lookback so the prototype
+            # sweep sees the entire backlog. Without it, older spam that
+            # matches an existing centroid (seen e.g. in Nora's INBOX:
+            # 36 candidates older than 30 days) is silently skipped.
+            proto_since_days = 365 * 10 if self.reprocess else 30
             matches = find_matches(
                 db, account_id=self.account_id, folder=folder,
-                since_days=30, limit=500,
+                since_days=proto_since_days, limit=500,
             )
             if not matches:
                 return
@@ -2528,8 +2533,19 @@ class EmailProcessingPipeline:
                                 # Email is in DB - check what needs processing
                                 needs_embedding = self.generate_embeddings and not status.get('has_embedding')
                                 needs_ai = self.use_ai and (self.reprocess or not status.get('has_ai_classification'))
-                                
-                                if needs_embedding or needs_ai:
+
+                                # `--reprocess` now forces the email back through
+                                # the pipeline even when it has an embedding AND
+                                # either already has ai_category or AI is skipped.
+                                # This is what lets a rule-set update actually
+                                # re-classify an already-ingested backlog; without
+                                # it the bulk filter treats these emails as
+                                # "already complete" and no rule ever fires on
+                                # them again, which was exactly the issue with
+                                # Nora's initial --skip-rules ingest.
+                                forced = bool(self.reprocess)
+
+                                if needs_embedding or needs_ai or forced:
                                     needs_processing = True
                                     # Track granular reasons
                                     if needs_embedding and needs_ai:
@@ -2538,6 +2554,9 @@ class EmailProcessingPipeline:
                                         skip_counts['needs_embedding_only'] += 1
                                     elif needs_ai:
                                         skip_counts['needs_ai_only'] += 1
+                                    elif forced:
+                                        skip_counts.setdefault('forced_reprocess', 0)
+                                        skip_counts['forced_reprocess'] += 1
                                 else:
                                     # Email is complete - has everything needed
                                     skip_counts['already_complete'] += 1
@@ -3294,7 +3313,10 @@ async def main():
     parser.add_argument('--skip-database', action='store_true',
                        help='Skip database storage (Phase 2)')
     parser.add_argument('--reprocess', action='store_true',
-                       help='Rerun AI classification on all emails, even if previously processed')
+                       help='Force the full pipeline (rules + VIP + AI + actions + prototype) '
+                            'to run on every fetched email, bypassing the bulk "already processed" '
+                            'dedup and disabling the prototype sweep\'s 30-day lookback. Use this '
+                            'to re-classify a backlog after a rule-set change.')
     parser.add_argument('--skip-embeddings', action='store_true',
                        help='Skip vector embedding generation (Phase 3, default: ON)')
     parser.add_argument('--skip-tracking', action='store_true',
