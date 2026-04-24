@@ -351,21 +351,37 @@ class AccountManager:
         """Get a global setting value"""
         return self.settings.get(key, default)
 
+    # Role tokens follow the IMAP SPECIAL-USE convention so naming is
+    # consistent across accounts.yaml (`folders.<role>`), Settings
+    # (`folder_<role>`), and rule/action folder strings (`{<role>}`).
+    KNOWN_FOLDER_ROLES = ("inbox", "sent", "archive", "trash", "junk")
+
     def resolve_folder_role(self, account_id: str, folder: str) -> str:
         """
-        Resolve folder role tokens like "{junk}", "{trash}", "{archive}",
-        "{inbox}", "{sent}" to the account-specific IMAP path defined in
-        accounts.yaml under `folders:`. Non-token strings pass through
-        unchanged, so existing literal paths (e.g. "MD/Spam") keep working.
+        Resolve folder role tokens like ``"{junk}"`` / ``"{trash}"`` /
+        ``"{archive}"`` / ``"{inbox}"`` / ``"{sent}"`` to the account-specific
+        IMAP path defined in accounts.yaml under ``folders:``. Non-token
+        strings pass through unchanged, so existing literal paths (e.g.
+        ``"MD/Spam"``) keep working.
 
-        Lookup order:
-          1. accounts[account_id].folders[role]       (per-account override)
-          2. global settings.folder_<role>            (FOLDER_SPAM/TRASH/ARCHIVE env)
-          3. the token string itself                  (debug last-resort)
+        Role names follow the IMAP SPECIAL-USE convention (RFC 6154) —
+        junk, trash, archive, inbox, sent — so they align with the
+        ``folders:`` block in accounts.yaml and the ``folder_<role>``
+        Settings fields.
+
+        Lookup order per role:
+          1. ``accounts[account_id].folders[role]``   (per-account override)
+          2. inbox / sent → universal IMAP defaults (``"INBOX"`` / ``"Sent"``)
+          3. junk / trash / archive → global ``settings.folder_<role>``
+
+        If none of the above produces a value for a token, ``ValueError``
+        is raised. The caller must NEVER silently pass an unresolved
+        ``"{role}"`` string to IMAP — ``create_if_missing=True`` would
+        otherwise create a literal ``{role}`` folder on the server.
 
         Example:
-            # personal account has folders.junk = "Junk"
-            # gmail account   has folders.junk = "[Gmail]/Spam"
+            # personal has folders.junk = "Junk"
+            # gmail    has folders.junk = "[Gmail]/Spam"
             manager.resolve_folder_role("personal", "{junk}")  -> "Junk"
             manager.resolve_folder_role("gmail",    "{junk}")  -> "[Gmail]/Spam"
             manager.resolve_folder_role("personal", "MD/Spam") -> "MD/Spam"
@@ -377,6 +393,10 @@ class AccountManager:
 
         Returns:
             A concrete IMAP folder path.
+
+        Raises:
+            ValueError: If ``folder`` is a ``"{role}"`` token and no
+                per-account or global fallback resolves it.
         """
         if not folder or not (folder.startswith("{") and folder.endswith("}")):
             return folder
@@ -386,23 +406,38 @@ class AccountManager:
         if account and role in account.folders:
             return account.folders[role]
 
-        # Fall back to the legacy single-folder settings so accounts
-        # without a folders.<role> entry still work exactly as before
-        # this method was introduced.
+        # Built-in universal defaults for inbox/sent (IMAP conventions)
+        # + global Settings for junk/trash/archive.
+        fallback_map: Dict[str, Optional[str]] = {
+            "inbox": "INBOX",
+            "sent": "Sent",
+        }
         try:
             from backend.core.config import get_settings
             settings = get_settings()
-            fallback_map = {
-                "junk":    getattr(settings, "folder_spam", None),
+            fallback_map.update({
+                "junk":    getattr(settings, "folder_junk", None),
                 "trash":   getattr(settings, "folder_trash", None),
                 "archive": getattr(settings, "folder_archive", None),
-            }
-            fallback = fallback_map.get(role)
-            if fallback:
-                return fallback
-        except Exception as e:  # noqa: BLE001 — logging only, best-effort fallback
-            logger.debug(f"resolve_folder_role fallback lookup failed: {e}")
+            })
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.debug(
+                f"resolve_folder_role: Settings unavailable for global "
+                f"fallback lookup (inbox/sent defaults still apply): {e}"
+            )
 
-        return folder
+        fallback = fallback_map.get(role)
+        if fallback:
+            return fallback
+
+        raise ValueError(
+            f"Cannot resolve folder role token '{folder}' for account "
+            f"'{account_id}': no entry in accounts.yaml[{account_id}].folders "
+            f"and no global fallback. Known roles: "
+            f"{sorted(fallback_map.keys())}. Either add "
+            f"'{role}: <imap-path>' under accounts.{account_id}.folders, "
+            f"or replace the token with a literal folder path in the "
+            f"rule/action."
+        )
 
 

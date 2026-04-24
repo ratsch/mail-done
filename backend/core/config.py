@@ -6,7 +6,7 @@ All settings loaded from environment variables with sensible defaults.
 """
 from typing import Optional, List
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict
+from pydantic import Field, ConfigDict, AliasChoices
 
 
 class Settings(BaseSettings):
@@ -132,11 +132,20 @@ class Settings(BaseSettings):
     dry_run: bool = Field(True, description="Dry run mode (no IMAP changes)")
     
     # ============================================================
-    # IMAP Action Folders (for UI actions: spam/delete/archive)
+    # IMAP Action Folders — named after the IMAP SPECIAL-USE roles
+    # (junk / trash / archive / inbox / sent). These are the global
+    # defaults used when a rule/action references a `{role}` token and
+    # the per-account `folders:` block in accounts.yaml doesn't define
+    # that role. For per-account overrides see AccountManager.
     # ============================================================
-    folder_spam: str = Field("MD/Spam", description="Folder for spam emails")
-    folder_trash: str = Field("Trash", description="Folder for deleted emails")
-    folder_archive: str = Field("Archive", description="Folder for archived emails")
+    folder_junk: str = Field(
+        "MD/Spam",
+        validation_alias=AliasChoices("folder_junk", "folder_spam"),
+        description="Folder for junk/spam emails (IMAP \\Junk role). "
+                    "Legacy env var FOLDER_SPAM still accepted for backward compat.",
+    )
+    folder_trash: str = Field("Trash", description="Folder for deleted emails (IMAP \\Trash role)")
+    folder_archive: str = Field("Archive", description="Folder for archived emails (IMAP \\Archive role)")
     auto_create_folders: bool = Field(True, description="Auto-create IMAP folders if missing")
     
     # ============================================================

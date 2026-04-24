@@ -370,7 +370,7 @@ class IMAPActionService:
         try:
             with self._get_imap_connection() as conn:
                 # Move to spam folder
-                success, message = self._move_email(conn, email, self.settings.folder_spam, repo)
+                success, message = self._move_email(conn, email, self.settings.folder_junk, repo)
                 
                 if not success:
                     raise IMAPActionError(message)
@@ -397,20 +397,20 @@ class IMAPActionService:
                 metadata.user_tags = tags
             
             # Update email folder and flags
-            email.folder = self.settings.folder_spam
+            email.folder = self.settings.folder_junk
             email.is_seen = True
             
             # Track folder change
             repo.track_folder_change(
                 email,
-                self.settings.folder_spam,
+                self.settings.folder_junk,
                 moved_by='user',
                 move_reason='Marked as spam via UI'
             )
             
             repo.db.commit()
             
-            return True, f"Moved to {self.settings.folder_spam} and marked as spam"
+            return True, f"Moved to {self.settings.folder_junk} and marked as spam"
             
         except IMAPActionError as e:
             repo.db.rollback()
