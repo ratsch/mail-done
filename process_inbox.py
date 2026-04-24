@@ -1173,13 +1173,16 @@ class EmailProcessingPipeline:
         return result
     
     def _prototype_sweep_preloop(self, imap, folder: str) -> None:
-        """Before the main loop, sweep already-embedded emails in the folder.
+        """Before the main loop, classify-as-spam any already-embedded
+        INBOX email whose embedding matches a spam centroid.
 
         Runs one SQL query against ``spam_prototype_centroids`` to find
         all INBOX emails (for this account) whose embedding is within a
-        centroid's threshold AND aren't already marked spam. For each
-        match: IMAP move → update DB folder + metadata. Uses the same
-        IMAPMonitor instance the main loop uses.
+        centroid's threshold AND aren't already marked with the
+        prototype's target category. For each match: IMAP move to the
+        prototype's action folder (typically Junk) → update DB folder
+        + metadata. Uses the same IMAPMonitor instance the main loop
+        uses.
 
         This path handles the 5-min embedding cron's case: emails were
         embedded by a prior run, but never passed through a classifier
@@ -1207,7 +1210,7 @@ class EmailProcessingPipeline:
             )
             if not matches:
                 return
-            print(f"🎯 Prototype pre-sweep: {len(matches)} email(s) to rescue")
+            print(f"🎯 Prototype pre-sweep: {len(matches)} email(s) to classify as spam")
 
             for m in matches:
                 label = f"{m.prototype_name} d={m.distance:.3f}"
