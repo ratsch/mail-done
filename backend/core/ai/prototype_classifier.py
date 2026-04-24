@@ -134,16 +134,24 @@ def _fetch_seed_embeddings(
     Returns ``(stacked_array[n, D], n)`` where D is the configured embedding
     dimension (EMBEDDING_DIM), or ``(None, 0)`` if no matches.
     """
-    # Postgres regex operator is ~*, our patterns are already case-insensitive.
-    # We OR the subject and from matches (from is optional).
+    # Postgres ARE regex differs from Python in one subtle but fatal spot:
+    # `\b` in PostgreSQL is the backspace character, NOT a word boundary
+    # (word boundary is `\y`). Our seed_filter patterns are written in
+    # Python-regex style (shared with classification_rules.yaml idioms),
+    # so translate `\b` → `\y` before handing them to Postgres. Without
+    # this translation, a pattern like `\b(Costco|C0STC0)\b.{0,80}…`
+    # silently matches zero rows because `\b` can't appear in normal text.
+    def _py_to_pg_regex(p: str) -> str:
+        return p.replace(r"\b", r"\y")
+
     params: Dict[str, Any] = {
-        "subj_re": cfg.subject_regex,
+        "subj_re": _py_to_pg_regex(cfg.subject_regex),
         "embedding_model": embedding_model,
     }
     where_from = ""
     if cfg.from_regex:
         where_from = " OR e.from_address ~ :from_re"
-        params["from_re"] = cfg.from_regex
+        params["from_re"] = _py_to_pg_regex(cfg.from_regex)
 
     rows = db.execute(text(f"""
         SELECT ee.embedding::text
