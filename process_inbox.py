@@ -2664,18 +2664,42 @@ class EmailProcessingPipeline:
                 email_iter = imap.fetch_unseen_emails(limit=limit)
                 print(f"   Mode: UNSEEN emails only")
             elif use_bulk_filtering and uids_to_process is not None and len(uids_to_process) > 0:
-                # Fetch only the filtered UIDs (already have the list)
+                # Fetch only the filtered UIDs (already have the list).
+                # Mirrors the reconnect-on-timeout pattern in IMAPMonitor.fetch_all_emails:
+                # once the server drops the session mid-iteration, every subsequent
+                # bare fetch() fails instantly with "cannot read from timed out object",
+                # so we have to rebuild the socket before continuing.
+                _timeout_patterns = (
+                    'timed out', 'timeout', 'cannot read', 'connection reset',
+                    'broken pipe', 'connection refused', 'eof', 'disconnected',
+                )
+
                 def fetch_filtered_emails():
-                    """Generator that fetches only the UIDs we need"""
+                    """Generator that fetches only the UIDs we need, with reconnect-on-timeout."""
                     for uid in uids_to_process:
+                        msg_id = int(uid)
                         try:
-                            msg_id = int(uid)
                             fetch_data = imap.client.fetch([msg_id], ['BODY.PEEK[]'])
-                            if msg_id in fetch_data:
-                                raw_email = fetch_data[msg_id].get(b'BODY[]', fetch_data[msg_id].get(b'RFC822'))
-                                yield (uid, raw_email)
                         except Exception as e:
-                            logger.error(f"Error fetching UID {uid}: {e}")
+                            err = str(e).lower()
+                            if any(p in err for p in _timeout_patterns):
+                                logger.warning(f"Connection error fetching UID {uid}: {e}")
+                                logger.info("Attempting reconnect...")
+                                if not imap.reconnect():
+                                    logger.error("Reconnect failed after retries, stopping fetch")
+                                    return
+                                try:
+                                    fetch_data = imap.client.fetch([msg_id], ['BODY.PEEK[]'])
+                                    logger.info(f"Successfully fetched UID {uid} after reconnect")
+                                except Exception as retry_error:
+                                    logger.error(f"Retry failed for UID {uid}: {retry_error}")
+                                    continue
+                            else:
+                                logger.error(f"Error fetching UID {uid}: {e}")
+                                continue
+                        if msg_id in fetch_data:
+                            raw_email = fetch_data[msg_id].get(b'BODY[]', fetch_data[msg_id].get(b'RFC822'))
+                            yield (uid, raw_email)
                 
                 email_iter = fetch_filtered_emails()
                 print(f"   Mode: Bulk filtered - fetching {len(uids_to_process)} emails that need processing")
