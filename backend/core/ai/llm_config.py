@@ -189,10 +189,17 @@ def get_model_config(model_name: str) -> Tuple[str, Optional[str], Optional[str]
             client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
     """
     config = _load_config()
-    
-    # Look up provider name for this model
-    provider_name = config.get("models", {}).get(model_name, config.get("default", "openai"))
-    
+
+    # Only return a provider when the model is explicitly mapped in
+    # `models:`. Falling back on the yaml's generic `default:` for every
+    # unmapped model was overriding env vars (e.g. EMBEDDING_PROVIDER=tei
+    # was getting clobbered by `default: azure` on a sister instance
+    # running Qwen3, silently pointing the "tei" client at Azure).
+    models_map = config.get("models", {})
+    if model_name not in models_map:
+        return None, None, None, None
+    provider_name = models_map[model_name]
+
     # Get provider config
     provider_cfg = config.get("providers", {}).get(provider_name, {})
     provider_type = provider_cfg.get("type", provider_name)
