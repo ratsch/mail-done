@@ -25,6 +25,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add attachment indexing tracking fields to emails table."""
+    # Widen alembic_version.version_num to 255 chars. Alembic's default is
+    # VARCHAR(32), and this revision's own id ("005_add_attachment_index_
+    # tracking", 33 chars) would otherwise trip the post-migration UPDATE
+    # with StringDataRightTruncation, rolling back the entire migration
+    # chain on fresh DBs. Idempotent: a no-op on DBs that were already
+    # widened manually (e.g. the original email_processor instance).
+    op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+
     # Add columns
     op.add_column('emails', sa.Column('attachment_index_status', sa.String(length=20), nullable=True))
     op.add_column('emails', sa.Column('attachment_index_attempts', sa.Integer(), nullable=True, server_default='0'))
