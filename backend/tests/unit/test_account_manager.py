@@ -23,10 +23,19 @@ def _mgr(accounts: dict[str, dict]) -> AccountManager:
     Bypasses AccountManager.__init__ so we don't need a real accounts.yaml
     or live credentials. Tests only exercise ``resolve_folder_role``, which
     depends solely on ``self.accounts``.
+
+    ``AccountConfig`` requires ``nickname``, ``display_name``, and
+    ``imap_host``; the rest have defaults. We fill placeholders so tests
+    stay focused on folder-role behavior.
     """
     mgr = AccountManager.__new__(AccountManager)
     mgr.accounts = {
-        nick: AccountConfig(**{"display_name": nick, **conf})
+        nick: AccountConfig(
+            nickname=nick,
+            display_name=nick,
+            imap_host="imap.test.example",
+            **conf,
+        )
         for nick, conf in accounts.items()
     }
     mgr.settings = {}
