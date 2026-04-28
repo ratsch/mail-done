@@ -183,8 +183,11 @@ build_and_start() {
     source .env
     set +a
 
-    # Build using podman-compose (this works fine)
-    podman-compose -f "$COMPOSE_FILE" build --no-cache
+    # Build using podman-compose (this works fine).
+    # -p md isolates this compose project from sibling deploys (e.g. md-nora)
+    # that would otherwise share a project namespace if both repos' deploy
+    # dirs are named "deploy" (podman-compose's default project = parent dir).
+    podman-compose -p md -f "$COMPOSE_FILE" build --no-cache
 
     # Start services using direct podman commands
     # (podman-compose has a bug with host networking where it adds --net default)

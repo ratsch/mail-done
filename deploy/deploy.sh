@@ -140,11 +140,11 @@ fi
 
 echo ""
 echo "Building containers..."
-$COMPOSE_CMD -f "$COMPOSE_FILE" build
+$COMPOSE_CMD -p md -f "$COMPOSE_FILE" build
 
 echo ""
 echo "Starting services..."
-$COMPOSE_CMD -f "$COMPOSE_FILE" up -d
+$COMPOSE_CMD -p md -f "$COMPOSE_FILE" up -d
 
 echo ""
 echo "Waiting for services to be ready..."
@@ -153,7 +153,7 @@ sleep 10
 # Check status
 echo ""
 echo "Service status:"
-$COMPOSE_CMD -f "$COMPOSE_FILE" ps
+$COMPOSE_CMD -p md -f "$COMPOSE_FILE" ps
 
 # Test health endpoint
 API_PORT=${API_PORT:-8000}
@@ -164,7 +164,7 @@ if curl -s "http://localhost:$API_PORT/health" > /dev/null 2>&1; then
     curl -s "http://localhost:$API_PORT/health" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:$API_PORT/health"
 else
     echo "API not responding yet. Check logs with:"
-    echo "  $COMPOSE_CMD -f $COMPOSE_FILE logs -f api"
+    echo "  $COMPOSE_CMD -p md -f $COMPOSE_FILE logs -f api"
 fi
 
 echo ""
@@ -175,7 +175,7 @@ echo ""
 echo "API URL: http://localhost:$API_PORT"
 echo ""
 echo "Useful commands:"
-echo "  View logs:     $COMPOSE_CMD -f $COMPOSE_FILE logs -f"
-echo "  Stop:          $COMPOSE_CMD -f $COMPOSE_FILE down"
-echo "  Restart API:   $COMPOSE_CMD -f $COMPOSE_FILE restart api"
+echo "  View logs:     $COMPOSE_CMD -p md -f $COMPOSE_FILE logs -f"
+echo "  Stop:          $COMPOSE_CMD -p md -f $COMPOSE_FILE down"
+echo "  Restart API:   $COMPOSE_CMD -p md -f $COMPOSE_FILE restart api"
 echo ""
